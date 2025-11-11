@@ -28,6 +28,10 @@ from mnist_lrp_activation_max import (
     LayerRelevancePropagation,
     ActivationMaximization
 )
+from mnist_perturbation_analysis import (
+    OcclusionSensitivity,
+    RISE
+)
 
 
 # Page configuration
@@ -104,10 +108,12 @@ def load_model():
 
 @st.cache_resource
 def load_xai_analyzers(_model):
-    """Load XAI analyzers (LRP and Activation Maximization)"""
+    """Load XAI analyzers (LRP, Activation Maximization, Perturbation)"""
     lrp = LayerRelevancePropagation(_model, epsilon=1e-10)
     actmax = ActivationMaximization(_model)
-    return lrp, actmax
+    occlusion = OcclusionSensitivity(_model)
+    rise = RISE(_model)
+    return lrp, actmax, occlusion, rise
 
 
 def preprocess_canvas_image(canvas_data):
@@ -177,7 +183,8 @@ def preprocess_canvas_image(canvas_data):
     return img_final
 
 
-def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, use_lrp=False, use_actmax=False):
+def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, occlusion, rise,
+                       use_lrp=False, use_actmax=False, use_perturbation=False):
     """
     Make prediction and perform XAI analysis
 
@@ -227,6 +234,25 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, use_lrp=
         )
         results['actmax_image'] = ideal_image
         results['actmax_scores'] = actmax_scores
+
+    # Add Perturbation Analysis if requested
+    if use_perturbation:
+        # Occlusion Sensitivity (faster with larger stride)
+        occlusion_map, _, _ = occlusion.compute_occlusion_sensitivity(
+            params, batch_stats, image,
+            window_size=4,
+            stride=3  # Larger stride for faster computation
+        )
+        results['occlusion_map'] = occlusion_map
+
+        # RISE (fewer masks for speed)
+        rise_map, _, _ = rise.compute_rise_map(
+            params, batch_stats, image,
+            n_masks=500,  # Reduced from 1000 for speed
+            mask_prob=0.5,
+            mask_size=7
+        )
+        results['rise_map'] = rise_map
 
     return results
 
@@ -392,6 +418,37 @@ def plot_activation_maximization(image, actmax_image, predicted_class):
     return fig
 
 
+def plot_perturbation_analysis(image, occlusion_map, rise_map):
+    """Plot perturbation-based analysis"""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Ensure 2D image
+    if image.ndim == 3:
+        img_2d = image.squeeze(-1)
+    else:
+        img_2d = image
+
+    # Original
+    axes[0].imshow(img_2d, cmap='gray')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].axis('off')
+
+    # Occlusion sensitivity
+    im1 = axes[1].imshow(occlusion_map, cmap='hot')
+    axes[1].set_title('Occlusion Sensitivity\n(Mask and Measure)', fontsize=12, fontweight='bold')
+    axes[1].axis('off')
+    plt.colorbar(im1, ax=axes[1], fraction=0.046)
+
+    # RISE
+    im2 = axes[2].imshow(rise_map, cmap='hot')
+    axes[2].set_title('RISE Map\n(Random Sampling)', fontsize=12, fontweight='bold')
+    axes[2].axis('off')
+    plt.colorbar(im2, ax=axes[2], fraction=0.046)
+
+    plt.tight_layout()
+    return fig
+
+
 def main():
     """Main Streamlit app"""
 
@@ -402,7 +459,7 @@ def main():
     # Load model
     with st.spinner("Loading model..."):
         params, batch_stats, model = load_model()
-        lrp, actmax = load_xai_analyzers(model)
+        lrp, actmax, occlusion, rise = load_xai_analyzers(model)
 
     # Sidebar
     st.sidebar.title("⚙️ Settings")
@@ -417,8 +474,10 @@ def main():
                                      help="Shows pixel-wise relevance scores for predictions")
     enable_actmax = st.sidebar.checkbox("Enable Activation Maximization", value=False,
                                        help="Generates ideal digit according to the model")
+    enable_perturbation = st.sidebar.checkbox("Enable Perturbation Analysis", value=False,
+                                             help="Tests importance by masking regions")
 
-    if enable_lrp or enable_actmax:
+    if enable_lrp or enable_actmax or enable_perturbation:
         st.sidebar.info("⚠️ Advanced techniques may take longer to compute")
 
     st.sidebar.markdown("---")
@@ -495,9 +554,10 @@ def main():
                     with st.spinner("Analyzing..."):
                         results = predict_and_analyze(
                             params, batch_stats, model, processed_image,
-                            lrp, actmax,
+                            lrp, actmax, occlusion, rise,
                             use_lrp=enable_lrp,
-                            use_actmax=enable_actmax
+                            use_actmax=enable_actmax,
+                            use_perturbation=enable_perturbation
                         )
 
                     # Display results
@@ -522,6 +582,8 @@ def main():
                             tab_names.append("🧬 LRP Analysis")
                         if enable_actmax:
                             tab_names.append("🎨 Activation Max")
+                        if enable_perturbation:
+                            tab_names.append("🎭 Perturbation")
 
                         tab_names.extend([
                             "📍 Regional Analysis",
@@ -644,6 +706,58 @@ def main():
                                     plt.grid(True, alpha=0.3)
                                     st.pyplot(fig_progress)
                                     plt.close()
+
+                        # Perturbation Analysis tab (conditional)
+                        if enable_perturbation:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### Perturbation-Based Analysis")
+                                st.markdown("""
+                                These methods test what happens when we mask or hide parts of the image.
+                                Regions that cause big drops in confidence when hidden are considered important.
+                                """)
+
+                                fig_pert = plot_perturbation_analysis(
+                                    processed_image,
+                                    results['occlusion_map'],
+                                    results['rise_map']
+                                )
+                                st.pyplot(fig_pert)
+                                plt.close()
+
+                                st.markdown("""
+                                **How to read:**
+                                - **Occlusion Sensitivity** (middle): Systematically masks regions with a sliding window.
+                                  Bright areas caused the biggest drop in confidence when hidden.
+                                - **RISE** (right): Uses random masks and averages results. More robust to noise.
+
+                                **Interpretation:** Both methods highlight critical features. If they agree,
+                                those features are definitely important for the prediction.
+                                """)
+
+                                # Comparison
+                                with st.expander("📊 Compare Methods"):
+                                    col1, col2 = st.columns(2)
+
+                                    with col1:
+                                        st.markdown("**Occlusion Sensitivity:**")
+                                        st.markdown(f"- Max importance: {results['occlusion_map'].max():.3f}")
+                                        st.markdown(f"- Mean importance: {results['occlusion_map'].mean():.3f}")
+                                        st.markdown("- Method: Deterministic sliding window")
+
+                                    with col2:
+                                        st.markdown("**RISE:**")
+                                        st.markdown(f"- Max importance: {results['rise_map'].max():.3f}")
+                                        st.markdown(f"- Mean importance: {results['rise_map'].mean():.3f}")
+                                        st.markdown("- Method: Random sampling (500 masks)")
+
+                                    # Correlation
+                                    correlation = np.corrcoef(
+                                        results['occlusion_map'].flatten(),
+                                        results['rise_map'].flatten()
+                                    )[0, 1]
+                                    st.info(f"📈 Correlation between methods: {correlation:.3f}\n\n"
+                                           f"High correlation (>0.7) means both methods agree on what's important.")
 
                         # Regional Analysis tab
                         with tabs[current_tab]:
@@ -831,7 +945,7 @@ Top 3 Predictions:
     st.markdown("""
     <div style="text-align: center; color: #666;">
         <p>Built with ❤️ using JAX, Flax, and Streamlit</p>
-        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, and Activation Maximization</p>
+        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, Activation Maximization, and Perturbation Analysis</p>
     </div>
     """, unsafe_allow_html=True)
 
