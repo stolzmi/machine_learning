@@ -102,7 +102,21 @@ def train_step(state: TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray], rng):
         )
 
         # Cross-entropy loss
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
+        ce_loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
+
+        # Concept sparsity regularization (L1) - encourages sparse activations
+        # We want concepts to be either clearly active (>0.7) or inactive (<0.3)
+        concept_sparsity = jnp.mean(jnp.minimum(concepts, 1 - concepts))
+
+        # Concept diversity regularization - encourages different concepts for different digits
+        # This prevents all concepts from being active for all inputs
+        concept_diversity = -jnp.var(concepts, axis=0).mean()
+
+        # Total loss with regularization
+        lambda_sparsity = 0.01  # Sparsity weight
+        lambda_diversity = 0.005  # Diversity weight
+
+        loss = ce_loss + lambda_sparsity * concept_sparsity + lambda_diversity * concept_diversity
 
         # Compute accuracy
         predictions = jnp.argmax(logits, axis=-1)
@@ -283,9 +297,9 @@ def load_cbn_model(path: str = 'mnist_cbn_model.pkl'):
 
 
 if __name__ == '__main__':
-    # Train the model
+    # Train the model with more epochs for better concept learning
     state, test_acc = train_cbn(
-        n_epochs=20,
+        n_epochs=50,  # Increased from 20 to allow concepts to stabilize
         batch_size=128,
         learning_rate=1e-3,
         save_path='mnist_cbn_model.pkl',
