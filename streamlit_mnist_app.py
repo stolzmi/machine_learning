@@ -215,12 +215,13 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, use_lrp=
     # Add Activation Maximization if requested
     if use_actmax:
         # Generate ideal image for predicted class
+        # Using fewer iterations and less frequent blur for faster computation
         ideal_image, actmax_scores = actmax.maximize_class(
             params, batch_stats, predicted_class,
-            n_iterations=200,
+            n_iterations=150,  # Reduced from 200 for speed
             learning_rate=1.0,
             l2_reg=0.01,
-            blur_every=5,
+            blur_every=10,  # Less frequent blur for speed
             blur_sigma=0.5,
             seed=42
         )

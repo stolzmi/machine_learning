@@ -397,36 +397,43 @@ class ActivationMaximization:
 
         Args:
             image: Input image [1, H, W, C]
-            sigma: Blur strength
+            sigma: Blur strength (used to determine kernel size)
 
         Returns:
             Blurred image
         """
-        # Simple box blur approximation
-        kernel_size = int(2 * sigma + 1)
+        if sigma <= 0:
+            return image
 
-        # Create blur kernel
-        from jax.scipy.ndimage import convolve
+        # For small images like MNIST, just use a simple uniform blur
+        # This is equivalent to a box filter which approximates Gaussian
+        kernel_size = max(3, int(sigma * 2))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
 
-        # 1D Gaussian kernel
-        x = jnp.arange(-kernel_size, kernel_size + 1)
-        kernel_1d = jnp.exp(-x**2 / (2 * sigma**2))
-        kernel_1d = kernel_1d / jnp.sum(kernel_1d)
+        # Use uniform kernel (box blur) - simpler and stable
+        kernel_weight = 1.0 / (kernel_size * kernel_size)
 
-        # 2D kernel (separable)
-        kernel_2d = kernel_1d[:, None] * kernel_1d[None, :]
-        kernel_2d = kernel_2d / jnp.sum(kernel_2d)
+        pad_size = kernel_size // 2
+        h, w = image.shape[1], image.shape[2]
 
-        # Apply convolution to each channel
         blurred = image
         for c in range(image.shape[-1]):
             channel = image[0, :, :, c]
-            # Pad to maintain size
-            padded = jnp.pad(channel, kernel_size, mode='edge')
-            blurred_channel = convolve(padded, kernel_2d, mode='constant')[
-                kernel_size:-kernel_size, kernel_size:-kernel_size
-            ]
-            blurred = blurred.at[0, :, :, c].set(blurred_channel)
+
+            # Pad image
+            padded = jnp.pad(channel, pad_size, mode='edge')
+
+            # Apply box blur efficiently using strided operations
+            # Create output array
+            result = jnp.zeros_like(channel)
+
+            # Vectorized box blur
+            for di in range(kernel_size):
+                for dj in range(kernel_size):
+                    result = result + padded[di:di+h, dj:dj+w] * kernel_weight
+
+            blurred = blurred.at[0, :, :, c].set(result)
 
         return blurred
 
