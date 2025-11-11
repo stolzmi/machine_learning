@@ -1,0 +1,21 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+streamlit==1.31.0
+requests==2.31.0
+pandas==2.2.0
+
+# CIFAR-10 and MNIST XAI Project Dependencies
+jax>=0.4.20
+jaxlib>=0.4.20
+flax>=0.7.5
+optax>=0.1.7
+tensorflow>=2.13.0
+tensorflow-datasets>=4.9.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+Pillow>=9.5.0
+
+# Streamlit App Dependencies
+streamlit-drawable-canvas>=0.9.0

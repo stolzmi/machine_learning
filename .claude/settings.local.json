@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python backend.py:*)",
+      "Bash(streamlit run:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m streamlit:*)",
+      "Bash(C:devPythonpython.exe backend.py)",
+      "Bash(C:devPythonpython.exe -m streamlit run frontend.py)",
+      "Bash(.venvScriptspip install -r requirements.txt)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(cmd //c \".venv\\Scripts\\pip.exe install -r requirements.txt\")",
+      "Bash(where:*)",
+      "Bash(/c/dev/Python/python.exe -m pip install:*)",
+      "Bash(/c/dev/Python/python.exe:*)",
+      "Bash(git init:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

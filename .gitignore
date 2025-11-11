@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Model files (may be too large for git)
+# Comment these out if using Git LFS
+*.pkl
+*.h5
+*.pth
+*.ckpt
+
+# Data and datasets
+*.tfrecord
+tensorflow_datasets/
+data/
+datasets/
+
+# Results and outputs
+xai_results/
+mnist_xai_results/
+training_history.png
+mnist_training_history.png
+*.png
+*.jpg
+*.jpeg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Streamlit
+.streamlit/secrets.toml

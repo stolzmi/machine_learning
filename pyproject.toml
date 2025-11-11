@@ -1,0 +1,48 @@
+[project]
+name = "advanced-machine-learning"
+version = "0.1.0"
+description = "Machine learning project with common dependencies"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",
+    "jupyter>=1.0.0",
+    "ipython>=8.12.0",
+    "tensorboard>=2.13.0",
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "flax>=0.8.0",
+    "optax>=0.1.7",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "tensorflow>=2.13.0",
+    "keras>=2.13.0",
+    "pillow>=10.0.0",
+    "tqdm>=4.65.0",
+    "requests>=2.31.0",
+    "tensorflow-datasets>=4.9.0",
+    "tfds>=0.3",
+    "tf>=1.1.0",
+    "backports.tarfile",
+    "fqdn",
+    "imblearn",
+    "importlib-metadata",
+    "ipywidgets",
+    "isoduration",
+    "jaraco.collections",
+    "jsonpointer",
+    "notebook",
+    "opencv-python",
+    "rfc3987-syntax",
+    "scikit-image",
+    "tinycss2",
+    "tomli",
+    "uri-template",
+    "webcolors",
+]
+

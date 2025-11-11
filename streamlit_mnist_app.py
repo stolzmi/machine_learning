@@ -1,0 +1,633 @@
+"""
+Interactive MNIST XAI App with Drawing Canvas
+Draw a digit and see real-time prediction with XAI analysis!
+"""
+
+import streamlit as st
+import numpy as np
+import jax
+import jax.numpy as jnp
+import pickle
+from pathlib import Path
+import matplotlib.pyplot as plt
+from PIL import Image
+import io
+
+# For drawing canvas
+from streamlit_drawable_canvas import st_canvas
+
+from mnist_cnn_model import MNISTCNN
+from mnist_xai_visualizations import GradCAM, SaliencyMap
+from mnist_shape_analysis import (
+    analyze_shape_importance,
+    identify_key_regions,
+    analyze_stroke_features,
+    generate_interpretation
+)
+
+
+# Page configuration
+st.set_page_config(
+    page_title="MNIST XAI Drawing App",
+    page_icon="✏️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #2ca02c;
+        margin-top: 1rem;
+    }
+    .metric-box {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .prediction-box {
+        background-color: #e8f4f8;
+        padding: 1.5rem;
+        border-radius: 0.5rem;
+        border: 2px solid #1f77b4;
+        margin: 1rem 0;
+    }
+    .interpretation-box {
+        background-color: #fff9e6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #ffcc00;
+        margin: 1rem 0;
+        font-family: monospace;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+MNIST_DIGITS = [str(i) for i in range(10)]
+
+
+@st.cache_resource
+def load_model():
+    """Load trained MNIST model"""
+    model_path = 'mnist_model.pkl'
+
+    if not Path(model_path).exists():
+        st.error(f"Model file '{model_path}' not found!")
+        st.info("Please train the model first: python train_mnist.py")
+        st.stop()
+
+    with open(model_path, 'rb') as f:
+        checkpoint = pickle.load(f)
+
+    params = checkpoint['params']
+    batch_stats = checkpoint['batch_stats']
+    model = MNISTCNN(num_classes=10)
+
+    return params, batch_stats, model
+
+
+def preprocess_canvas_image(canvas_data):
+    """
+    Preprocess drawn image to match MNIST format
+
+    Args:
+        canvas_data: Canvas image data from streamlit-drawable-canvas
+
+    Returns:
+        Preprocessed image ready for model [28, 28, 1]
+    """
+    if canvas_data is None:
+        return None
+
+    # Get image data (RGBA)
+    img = canvas_data.astype(np.uint8)
+
+    # Extract RGB channels (ignore alpha for now)
+    # White drawing on black background
+    img_rgb = img[:, :, :3]
+
+    # Convert to grayscale
+    img_gray = np.mean(img_rgb, axis=2).astype(np.uint8)
+
+    # Find bounding box of the drawing
+    coords = np.column_stack(np.where(img_gray > 10))
+
+    if len(coords) == 0:
+        # No drawing detected, return blank image
+        return np.zeros((28, 28, 1), dtype=np.float32)
+
+    # Get bounding box
+    y_min, x_min = coords.min(axis=0)
+    y_max, x_max = coords.max(axis=0)
+
+    # Add padding (20% of size)
+    height = y_max - y_min
+    width = x_max - x_min
+    pad_h = int(height * 0.2)
+    pad_w = int(width * 0.2)
+
+    y_min = max(0, y_min - pad_h)
+    y_max = min(img_gray.shape[0], y_max + pad_h)
+    x_min = max(0, x_min - pad_w)
+    x_max = min(img_gray.shape[1], x_max + pad_w)
+
+    # Crop to bounding box
+    img_cropped = img_gray[y_min:y_max, x_min:x_max]
+
+    # Resize to 20x20 (MNIST digits are ~20x20 in center of 28x28)
+    img_pil = Image.fromarray(img_cropped)
+    img_resized = img_pil.resize((20, 20), Image.Resampling.LANCZOS)
+    img_20x20 = np.array(img_resized)
+
+    # Center in 28x28 image
+    img_28x28 = np.zeros((28, 28), dtype=np.uint8)
+    offset = 4  # Center the 20x20 in 28x28
+    img_28x28[offset:offset+20, offset:offset+20] = img_20x20
+
+    # Normalize to [0, 1]
+    img_normalized = img_28x28.astype(np.float32) / 255.0
+
+    # Add channel dimension
+    img_final = np.expand_dims(img_normalized, -1)
+
+    return img_final
+
+
+def predict_and_analyze(params, batch_stats, model, image):
+    """
+    Make prediction and perform XAI analysis
+
+    Returns:
+        Dictionary with all analysis results
+    """
+    # Basic prediction
+    variables = {'params': params, 'batch_stats': batch_stats}
+    logits = model.apply(variables, jnp.expand_dims(image, 0), training=False)
+    probs = jax.nn.softmax(logits[0])
+    predicted_class = int(jnp.argmax(probs))
+
+    # XAI analysis
+    analysis = analyze_shape_importance(params, batch_stats, model, image)
+    region_scores = identify_key_regions(image, analysis['saliency'])
+    stroke_features = analyze_stroke_features(image, analysis['saliency'])
+
+    return {
+        'predicted_class': predicted_class,
+        'probabilities': np.array(probs),
+        'logits': np.array(logits[0]),
+        'gradcam': analysis['gradcam'],
+        'saliency': analysis['saliency'],
+        'region_scores': region_scores,
+        'stroke_features': stroke_features
+    }
+
+
+def plot_xai_visualizations(image, gradcam, saliency):
+    """Create XAI visualization plots"""
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    # Ensure 2D image
+    if image.ndim == 3:
+        img_2d = image.squeeze(-1)
+    else:
+        img_2d = image
+
+    # Original
+    axes[0].imshow(img_2d, cmap='gray')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].axis('off')
+
+    # GradCAM
+    im1 = axes[1].imshow(gradcam, cmap='jet')
+    axes[1].set_title('GradCAM\n(Spatial Importance)', fontsize=12, fontweight='bold')
+    axes[1].axis('off')
+    plt.colorbar(im1, ax=axes[1], fraction=0.046)
+
+    # Saliency
+    im2 = axes[2].imshow(saliency, cmap='hot')
+    axes[2].set_title('Saliency Map\n(Pixel Importance)', fontsize=12, fontweight='bold')
+    axes[2].axis('off')
+    plt.colorbar(im2, ax=axes[2], fraction=0.046)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_region_importance(region_scores):
+    """Plot region importance chart"""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    regions = ['top', 'bottom', 'left', 'right', 'center']
+    scores = [region_scores[r]['avg_importance'] for r in regions]
+
+    bars = ax.barh(regions, scores, color='steelblue')
+    ax.set_xlabel('Average Importance', fontsize=11)
+    ax.set_title('Region Importance Analysis', fontsize=12, fontweight='bold')
+    ax.set_xlim(0, 1)
+
+    # Add value labels
+    for i, (bar, score) in enumerate(zip(bars, scores)):
+        ax.text(score + 0.02, i, f'{score:.3f}', va='center', fontsize=10)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_stroke_features(stroke_features):
+    """Plot stroke feature importance"""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    features = ['Horizontal\nStrokes', 'Vertical\nStrokes', 'Curves', 'Intersections']
+    scores = [
+        stroke_features['horizontal_strokes'],
+        stroke_features['vertical_strokes'],
+        stroke_features['curves'],
+        stroke_features['intersections']
+    ]
+
+    bars = ax.bar(features, scores, color='coral')
+    ax.set_ylabel('Importance Score', fontsize=11)
+    ax.set_title('Stroke Feature Importance', fontsize=12, fontweight='bold')
+    ax.set_ylim(0, 1)
+
+    # Add value labels
+    for bar, score in zip(bars, scores):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                f'{score:.3f}', ha='center', va='bottom', fontsize=10)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_probability_bars(probabilities):
+    """Plot prediction probabilities"""
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    digits = [str(i) for i in range(10)]
+
+    bars = ax.barh(digits, probabilities, color='lightgreen')
+    bars[np.argmax(probabilities)].set_color('darkgreen')
+
+    ax.set_xlabel('Probability', fontsize=11)
+    ax.set_title('Prediction Probabilities', fontsize=12, fontweight='bold')
+    ax.set_xlim(0, 1)
+
+    # Add percentage labels
+    for i, (bar, prob) in enumerate(zip(bars, probabilities)):
+        ax.text(prob + 0.02, i, f'{prob:.1%}', va='center', fontsize=10)
+
+    plt.tight_layout()
+    return fig
+
+
+def main():
+    """Main Streamlit app"""
+
+    # Header
+    st.markdown('<div class="main-header">✏️ MNIST XAI Drawing App</div>', unsafe_allow_html=True)
+    st.markdown("Draw a digit and see real-time prediction with explainable AI analysis!")
+
+    # Load model
+    with st.spinner("Loading model..."):
+        params, batch_stats, model = load_model()
+
+    # Sidebar
+    st.sidebar.title("⚙️ Settings")
+
+    canvas_size = st.sidebar.slider("Canvas Size", 200, 400, 280, 20)
+    stroke_width = st.sidebar.slider("Brush Size", 10, 50, 20, 5)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📖 Instructions")
+    st.sidebar.markdown("""
+    1. Draw a digit (0-9) in the canvas
+    2. Click 'Predict' button
+    3. See prediction and XAI analysis
+    4. Click 'Clear' to draw again
+    """)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🎯 Tips for Best Results")
+    st.sidebar.markdown("""
+    - Draw larger digits
+    - Center your drawing
+    - Make strokes clear
+    - Similar to handwritten style
+    """)
+
+    # Main content area
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.markdown('<div class="sub-header">🎨 Draw Here</div>', unsafe_allow_html=True)
+
+        # Drawing canvas
+        canvas_result = st_canvas(
+            fill_color="rgba(0, 0, 0, 0)",
+            stroke_width=stroke_width,
+            stroke_color="white",
+            background_color="black",
+            height=canvas_size,
+            width=canvas_size,
+            drawing_mode="freedraw",
+            key="canvas",
+        )
+
+        # Buttons
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
+
+        with btn_col1:
+            predict_button = st.button("🔮 Predict", type="primary", use_container_width=True)
+
+        with btn_col2:
+            clear_button = st.button("🗑️ Clear", use_container_width=True)
+
+        with btn_col3:
+            example_button = st.button("📝 Load Example", use_container_width=True)
+
+    with col2:
+        st.markdown('<div class="sub-header">📊 Analysis Results</div>', unsafe_allow_html=True)
+
+        # Placeholder for results
+        result_placeholder = st.empty()
+
+    # Handle example loading
+    if example_button:
+        st.info("Draw a digit in the canvas to see predictions!")
+
+    # Handle prediction
+    if predict_button:
+        if canvas_result.image_data is not None:
+            # Check if canvas is empty
+            if np.sum(canvas_result.image_data[:, :, 3]) < 100:
+                st.warning("⚠️ Canvas appears empty! Please draw a digit first.")
+            else:
+                # Preprocess image
+                with st.spinner("Processing image..."):
+                    processed_image = preprocess_canvas_image(canvas_result.image_data)
+
+                if processed_image is not None:
+                    # Make prediction and analyze
+                    with st.spinner("Analyzing..."):
+                        results = predict_and_analyze(params, batch_stats, model, processed_image)
+
+                    # Display results
+                    with result_placeholder.container():
+                        # Prediction result
+                        st.markdown(f"""
+                        <div class="prediction-box">
+                            <h2 style="text-align: center; color: #1f77b4;">
+                                Predicted Digit: <span style="font-size: 4rem;">{results['predicted_class']}</span>
+                            </h2>
+                            <h3 style="text-align: center;">
+                                Confidence: {results['probabilities'][results['predicted_class']]:.1%}
+                            </h3>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Tabs for different analyses
+                        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                            "🔍 XAI Visualization",
+                            "📍 Regional Analysis",
+                            "✏️ Stroke Features",
+                            "📊 All Probabilities",
+                            "💡 Interpretation"
+                        ])
+
+                        with tab1:
+                            st.markdown("### Visual Explanations")
+
+                            # Show preprocessed image for debugging
+                            st.markdown("**Preprocessed Image (28×28):**")
+                            col_a, col_b, col_c = st.columns([1, 1, 2])
+                            with col_a:
+                                fig_debug = plt.figure(figsize=(3, 3))
+                                plt.imshow(processed_image.squeeze(), cmap='gray')
+                                plt.title('Model Input', fontsize=10)
+                                plt.axis('off')
+                                st.pyplot(fig_debug)
+                                plt.close()
+                            with col_b:
+                                st.markdown("""
+                                This is what the model sees:
+                                - 28×28 pixels
+                                - Grayscale
+                                - White digit on black background
+                                - Centered
+                                """)
+
+                            st.markdown("---")
+
+                            fig_xai = plot_xai_visualizations(
+                                processed_image,
+                                results['gradcam'],
+                                results['saliency']
+                            )
+                            st.pyplot(fig_xai)
+                            plt.close()
+
+                            st.markdown("""
+                            **How to read:**
+                            - **Your Drawing**: Processed to 28×28 MNIST format
+                            - **GradCAM** (middle): Shows which regions are important (red = high, blue = low)
+                            - **Saliency Map** (right): Shows which pixels matter most (bright = important)
+                            """)
+
+                        with tab2:
+                            st.markdown("### Which Regions Matter Most?")
+                            fig_regions = plot_region_importance(results['region_scores'])
+                            st.pyplot(fig_regions)
+                            plt.close()
+
+                            # Show top regions
+                            sorted_regions = sorted(
+                                results['region_scores'].items(),
+                                key=lambda x: x[1]['avg_importance'],
+                                reverse=True
+                            )
+
+                            st.markdown("**Top 3 Important Regions:**")
+                            for i, (region, scores) in enumerate(sorted_regions[:3], 1):
+                                st.markdown(f"{i}. **{region.upper()}**: {scores['avg_importance']:.3f}")
+
+                        with tab3:
+                            st.markdown("### Which Shapes/Strokes Are Important?")
+                            fig_strokes = plot_stroke_features(results['stroke_features'])
+                            st.pyplot(fig_strokes)
+                            plt.close()
+
+                            # Explain dominant feature
+                            stroke_names = {
+                                'horizontal_strokes': 'Horizontal Strokes',
+                                'vertical_strokes': 'Vertical Strokes',
+                                'curves': 'Curves/Loops',
+                                'intersections': 'Intersections'
+                            }
+
+                            top_stroke = max(
+                                results['stroke_features'].items(),
+                                key=lambda x: x[1]
+                            )
+
+                            st.markdown(f"""
+                            **Dominant Feature:** {stroke_names[top_stroke[0]]}
+                            **Importance:** {top_stroke[1]:.3f}
+                            """)
+
+                            # Expected patterns for predicted digit
+                            digit_patterns = {
+                                0: "Expected: Curves (circular loop)",
+                                1: "Expected: Vertical strokes",
+                                2: "Expected: Curves + Horizontal strokes",
+                                3: "Expected: Curves (stacked)",
+                                4: "Expected: Intersections + Vertical strokes",
+                                5: "Expected: Horizontal strokes + Curves",
+                                6: "Expected: Curves (loop with stem)",
+                                7: "Expected: Horizontal + Vertical strokes",
+                                8: "Expected: Curves + Intersections (two loops)",
+                                9: "Expected: Curves (top loop with stem)"
+                            }
+
+                            st.info(f"ℹ️ {digit_patterns[results['predicted_class']]}")
+
+                        with tab4:
+                            st.markdown("### Prediction Confidence for All Digits")
+                            fig_probs = plot_probability_bars(results['probabilities'])
+                            st.pyplot(fig_probs)
+                            plt.close()
+
+                            # Show top 3
+                            top3_idx = np.argsort(results['probabilities'])[-3:][::-1]
+
+                            st.markdown("**Top 3 Predictions:**")
+                            for i, idx in enumerate(top3_idx, 1):
+                                st.markdown(
+                                    f"{i}. Digit **{idx}**: {results['probabilities'][idx]:.2%}"
+                                )
+
+                        with tab5:
+                            st.markdown("### Shape Interpretation")
+
+                            # Generate interpretation
+                            interpretation = generate_interpretation(
+                                results['predicted_class'],
+                                results['region_scores'],
+                                results['stroke_features'],
+                                results['probabilities']
+                            )
+
+                            st.markdown(f'<div class="interpretation-box">{interpretation}</div>',
+                                      unsafe_allow_html=True)
+
+                            # Additional insights
+                            st.markdown("---")
+                            st.markdown("### 🔬 Detailed Insights")
+
+                            col_a, col_b = st.columns(2)
+
+                            with col_a:
+                                st.markdown("**Spatial Focus:**")
+                                top_region = max(
+                                    results['region_scores'].items(),
+                                    key=lambda x: x[1]['avg_importance']
+                                )
+                                st.markdown(f"- Primary region: **{top_region[0]}**")
+                                st.markdown(f"- Importance: **{top_region[1]['avg_importance']:.3f}**")
+
+                            with col_b:
+                                st.markdown("**Shape Features:**")
+                                top_stroke = max(
+                                    results['stroke_features'].items(),
+                                    key=lambda x: x[1]
+                                )
+                                stroke_names = {
+                                    'horizontal_strokes': 'Horizontal lines',
+                                    'vertical_strokes': 'Vertical lines',
+                                    'curves': 'Curves/loops',
+                                    'intersections': 'Crossing points'
+                                }
+                                st.markdown(f"- Key feature: **{stroke_names[top_stroke[0]]}**")
+                                st.markdown(f"- Importance: **{top_stroke[1]:.3f}**")
+
+                            # Why this prediction?
+                            st.markdown("---")
+                            st.markdown("### 🎯 Why This Prediction?")
+
+                            confidence = results['probabilities'][results['predicted_class']]
+
+                            if confidence > 0.9:
+                                st.success(f"""
+                                ✅ **High Confidence ({confidence:.1%})**
+                                The model found clear, distinctive features of digit '{results['predicted_class']}'.
+                                The shape matches expected patterns very well.
+                                """)
+                            elif confidence > 0.7:
+                                st.info(f"""
+                                ℹ️ **Good Confidence ({confidence:.1%})**
+                                The model identified key features of digit '{results['predicted_class']}'.
+                                Some features may be ambiguous or similar to other digits.
+                                """)
+                            else:
+                                st.warning(f"""
+                                ⚠️ **Lower Confidence ({confidence:.1%})**
+                                The model is uncertain. The digit may be:
+                                - Ambiguously drawn
+                                - Similar to multiple digits
+                                - Missing key distinctive features
+
+                                Try drawing more clearly or check top alternatives above.
+                                """)
+
+                        # Download results
+                        st.markdown("---")
+                        if st.button("💾 Save Analysis Report"):
+                            # Create a simple text report
+                            report = f"""
+MNIST XAI Analysis Report
+========================
+
+Predicted Digit: {results['predicted_class']}
+Confidence: {results['probabilities'][results['predicted_class']]:.2%}
+
+Top 3 Predictions:
+"""
+                            top3_idx = np.argsort(results['probabilities'])[-3:][::-1]
+                            for i, idx in enumerate(top3_idx, 1):
+                                report += f"{i}. Digit {idx}: {results['probabilities'][idx]:.2%}\n"
+
+                            report += f"\n{interpretation}"
+
+                            st.download_button(
+                                label="📄 Download Report",
+                                data=report,
+                                file_name=f"mnist_analysis_digit_{results['predicted_class']}.txt",
+                                mime="text/plain"
+                            )
+        else:
+            st.warning("⚠️ No drawing detected. Please draw a digit first!")
+
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #666;">
+        <p>Built with ❤️ using JAX, Flax, and Streamlit</p>
+        <p>🔍 Explainable AI powered by GradCAM and Saliency Maps</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
