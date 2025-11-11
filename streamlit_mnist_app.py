@@ -24,6 +24,10 @@ from mnist_shape_analysis import (
     analyze_stroke_features,
     generate_interpretation
 )
+from mnist_lrp_activation_max import (
+    LayerRelevancePropagation,
+    ActivationMaximization
+)
 
 
 # Page configuration
@@ -98,6 +102,14 @@ def load_model():
     return params, batch_stats, model
 
 
+@st.cache_resource
+def load_xai_analyzers(_model):
+    """Load XAI analyzers (LRP and Activation Maximization)"""
+    lrp = LayerRelevancePropagation(_model, epsilon=1e-10)
+    actmax = ActivationMaximization(_model)
+    return lrp, actmax
+
+
 def preprocess_canvas_image(canvas_data):
     """
     Preprocess drawn image to match MNIST format
@@ -165,7 +177,7 @@ def preprocess_canvas_image(canvas_data):
     return img_final
 
 
-def predict_and_analyze(params, batch_stats, model, image):
+def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, use_lrp=False, use_actmax=False):
     """
     Make prediction and perform XAI analysis
 
@@ -183,7 +195,7 @@ def predict_and_analyze(params, batch_stats, model, image):
     region_scores = identify_key_regions(image, analysis['saliency'])
     stroke_features = analyze_stroke_features(image, analysis['saliency'])
 
-    return {
+    results = {
         'predicted_class': predicted_class,
         'probabilities': np.array(probs),
         'logits': np.array(logits[0]),
@@ -192,6 +204,30 @@ def predict_and_analyze(params, batch_stats, model, image):
         'region_scores': region_scores,
         'stroke_features': stroke_features
     }
+
+    # Add LRP analysis if requested
+    if use_lrp:
+        lrp_relevance, _, _ = lrp.compute_lrp(params, batch_stats, image)
+        lrp_epsilon, _, _ = lrp.compute_lrp_epsilon_rule(params, batch_stats, image)
+        results['lrp_relevance'] = lrp_relevance
+        results['lrp_epsilon'] = lrp_epsilon
+
+    # Add Activation Maximization if requested
+    if use_actmax:
+        # Generate ideal image for predicted class
+        ideal_image, actmax_scores = actmax.maximize_class(
+            params, batch_stats, predicted_class,
+            n_iterations=200,
+            learning_rate=1.0,
+            l2_reg=0.01,
+            blur_every=5,
+            blur_sigma=0.5,
+            seed=42
+        )
+        results['actmax_image'] = ideal_image
+        results['actmax_scores'] = actmax_scores
+
+    return results
 
 
 def plot_xai_visualizations(image, gradcam, saliency):
@@ -293,6 +329,68 @@ def plot_probability_bars(probabilities):
     return fig
 
 
+def plot_lrp_analysis(image, lrp_relevance, lrp_epsilon):
+    """Plot LRP analysis comparison"""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Ensure 2D image
+    if image.ndim == 3:
+        img_2d = image.squeeze(-1)
+    else:
+        img_2d = image
+
+    # Original
+    axes[0].imshow(img_2d, cmap='gray')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].axis('off')
+
+    # LRP standard
+    im1 = axes[1].imshow(lrp_relevance, cmap='seismic', vmin=0, vmax=1)
+    axes[1].set_title('LRP: Relevance Map\n(Gradient-based)', fontsize=12, fontweight='bold')
+    axes[1].axis('off')
+    plt.colorbar(im1, ax=axes[1], fraction=0.046)
+
+    # LRP epsilon
+    im2 = axes[2].imshow(lrp_epsilon, cmap='seismic', vmin=0, vmax=1)
+    axes[2].set_title('LRP: Relevance Map\n(Epsilon Rule)', fontsize=12, fontweight='bold')
+    axes[2].axis('off')
+    plt.colorbar(im2, ax=axes[2], fraction=0.046)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_activation_maximization(image, actmax_image, predicted_class):
+    """Plot activation maximization comparison"""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Ensure 2D image
+    if image.ndim == 3:
+        img_2d = image.squeeze(-1)
+    else:
+        img_2d = image
+
+    # Your drawing
+    axes[0].imshow(img_2d, cmap='gray')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].axis('off')
+
+    # Generated ideal
+    axes[1].imshow(actmax_image, cmap='gray')
+    axes[1].set_title(f"Model's Ideal Digit '{predicted_class}'", fontsize=12, fontweight='bold')
+    axes[1].axis('off')
+
+    # Difference
+    diff = np.abs(img_2d - actmax_image)
+    im = axes[2].imshow(diff, cmap='hot')
+    axes[2].set_title('Difference\n(Your vs Ideal)', fontsize=12, fontweight='bold')
+    axes[2].axis('off')
+    plt.colorbar(im, ax=axes[2], fraction=0.046)
+
+    plt.tight_layout()
+    return fig
+
+
 def main():
     """Main Streamlit app"""
 
@@ -303,12 +401,24 @@ def main():
     # Load model
     with st.spinner("Loading model..."):
         params, batch_stats, model = load_model()
+        lrp, actmax = load_xai_analyzers(model)
 
     # Sidebar
     st.sidebar.title("⚙️ Settings")
 
     canvas_size = st.sidebar.slider("Canvas Size", 200, 400, 280, 20)
     stroke_width = st.sidebar.slider("Brush Size", 10, 50, 20, 5)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔬 Advanced XAI Techniques")
+
+    enable_lrp = st.sidebar.checkbox("Enable Layer Relevance Propagation (LRP)", value=False,
+                                     help="Shows pixel-wise relevance scores for predictions")
+    enable_actmax = st.sidebar.checkbox("Enable Activation Maximization", value=False,
+                                       help="Generates ideal digit according to the model")
+
+    if enable_lrp or enable_actmax:
+        st.sidebar.info("⚠️ Advanced techniques may take longer to compute")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📖 Instructions")
@@ -382,7 +492,12 @@ def main():
                 if processed_image is not None:
                     # Make prediction and analyze
                     with st.spinner("Analyzing..."):
-                        results = predict_and_analyze(params, batch_stats, model, processed_image)
+                        results = predict_and_analyze(
+                            params, batch_stats, model, processed_image,
+                            lrp, actmax,
+                            use_lrp=enable_lrp,
+                            use_actmax=enable_actmax
+                        )
 
                     # Display results
                     with result_placeholder.container():
@@ -399,15 +514,27 @@ def main():
                         """, unsafe_allow_html=True)
 
                         # Tabs for different analyses
-                        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                            "🔍 XAI Visualization",
+                        tab_names = ["🔍 XAI Visualization"]
+
+                        # Add advanced tabs if enabled
+                        if enable_lrp:
+                            tab_names.append("🧬 LRP Analysis")
+                        if enable_actmax:
+                            tab_names.append("🎨 Activation Max")
+
+                        tab_names.extend([
                             "📍 Regional Analysis",
                             "✏️ Stroke Features",
                             "📊 All Probabilities",
                             "💡 Interpretation"
                         ])
 
-                        with tab1:
+                        tabs = st.tabs(tab_names)
+                        current_tab = 0
+
+                        # Tab 1: XAI Visualization
+                        with tabs[current_tab]:
+                            current_tab += 1
                             st.markdown("### Visual Explanations")
 
                             # Show preprocessed image for debugging
@@ -446,7 +573,80 @@ def main():
                             - **Saliency Map** (right): Shows which pixels matter most (bright = important)
                             """)
 
-                        with tab2:
+                        # LRP Analysis tab (conditional)
+                        if enable_lrp:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### Layer-wise Relevance Propagation")
+                                st.markdown("""
+                                LRP decomposes the prediction into pixel-wise relevance scores,
+                                showing exactly which pixels contributed to the model's decision.
+                                """)
+
+                                fig_lrp = plot_lrp_analysis(
+                                    processed_image,
+                                    results['lrp_relevance'],
+                                    results['lrp_epsilon']
+                                )
+                                st.pyplot(fig_lrp)
+                                plt.close()
+
+                                st.markdown("""
+                                **How to read:**
+                                - **Warmer colors (red)**: Higher positive relevance (contributed to prediction)
+                                - **Cooler colors (blue)**: Lower relevance
+                                - **Gradient-based**: Fast approximation using gradients
+                                - **Epsilon Rule**: More precise layer-by-layer propagation
+
+                                **Interpretation:** Bright red pixels had the strongest influence on
+                                the model predicting this as digit '{}'.
+                                """.format(results['predicted_class']))
+
+                        # Activation Maximization tab (conditional)
+                        if enable_actmax:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### Activation Maximization")
+                                st.markdown(f"""
+                                What does the model think the "perfect" digit **{results['predicted_class']}** looks like?
+                                This visualization was generated by optimizing an image to maximize the model's
+                                confidence for this digit.
+                                """)
+
+                                fig_actmax = plot_activation_maximization(
+                                    processed_image,
+                                    results['actmax_image'],
+                                    results['predicted_class']
+                                )
+                                st.pyplot(fig_actmax)
+                                plt.close()
+
+                                st.markdown("""
+                                **How to read:**
+                                - **Your Drawing** (left): What you drew
+                                - **Model's Ideal** (middle): What the model thinks this digit should look like
+                                - **Difference** (right): Shows discrepancies (brighter = more different)
+
+                                **Interpretation:** The model's ideal representation highlights the key features
+                                it associates with this digit. Large differences suggest areas where your
+                                drawing deviates from the model's learned prototype.
+                                """)
+
+                                # Show optimization progress
+                                with st.expander("📈 View Optimization Progress"):
+                                    fig_progress = plt.figure(figsize=(10, 4))
+                                    plt.plot(results['actmax_scores'], linewidth=2, color='steelblue')
+                                    plt.xlabel('Iteration', fontsize=11)
+                                    plt.ylabel('Activation Score', fontsize=11)
+                                    plt.title(f"Activation Maximization for Digit {results['predicted_class']}",
+                                             fontsize=12, fontweight='bold')
+                                    plt.grid(True, alpha=0.3)
+                                    st.pyplot(fig_progress)
+                                    plt.close()
+
+                        # Regional Analysis tab
+                        with tabs[current_tab]:
+                            current_tab += 1
                             st.markdown("### Which Regions Matter Most?")
                             fig_regions = plot_region_importance(results['region_scores'])
                             st.pyplot(fig_regions)
@@ -463,7 +663,9 @@ def main():
                             for i, (region, scores) in enumerate(sorted_regions[:3], 1):
                                 st.markdown(f"{i}. **{region.upper()}**: {scores['avg_importance']:.3f}")
 
-                        with tab3:
+                        # Stroke Features tab
+                        with tabs[current_tab]:
+                            current_tab += 1
                             st.markdown("### Which Shapes/Strokes Are Important?")
                             fig_strokes = plot_stroke_features(results['stroke_features'])
                             st.pyplot(fig_strokes)
@@ -503,7 +705,9 @@ def main():
 
                             st.info(f"ℹ️ {digit_patterns[results['predicted_class']]}")
 
-                        with tab4:
+                        # All Probabilities tab
+                        with tabs[current_tab]:
+                            current_tab += 1
                             st.markdown("### Prediction Confidence for All Digits")
                             fig_probs = plot_probability_bars(results['probabilities'])
                             st.pyplot(fig_probs)
@@ -518,7 +722,9 @@ def main():
                                     f"{i}. Digit **{idx}**: {results['probabilities'][idx]:.2%}"
                                 )
 
-                        with tab5:
+                        # Interpretation tab
+                        with tabs[current_tab]:
+                            current_tab += 1
                             st.markdown("### Shape Interpretation")
 
                             # Generate interpretation
@@ -624,7 +830,7 @@ Top 3 Predictions:
     st.markdown("""
     <div style="text-align: center; color: #666;">
         <p>Built with ❤️ using JAX, Flax, and Streamlit</p>
-        <p>🔍 Explainable AI powered by GradCAM and Saliency Maps</p>
+        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, and Activation Maximization</p>
     </div>
     """, unsafe_allow_html=True)
 
