@@ -164,15 +164,35 @@ def preprocess_canvas_image(canvas_data):
     # Crop to bounding box
     img_cropped = img_gray[y_min:y_max, x_min:x_max]
 
-    # Resize to 20x20 (MNIST digits are ~20x20 in center of 28x28)
+    # Resize maintaining aspect ratio to fit in 20x20 (MNIST digits are ~20x20 in center of 28x28)
+    height, width = img_cropped.shape
+
+    # Calculate scale to fit within 20x20 while maintaining aspect ratio
+    max_size = 20
+    if height > width:
+        new_height = max_size
+        new_width = int(width * (max_size / height))
+    else:
+        new_width = max_size
+        new_height = int(height * (max_size / width))
+
+    # Ensure dimensions are at least 1
+    new_width = max(1, new_width)
+    new_height = max(1, new_height)
+
+    # Resize maintaining aspect ratio
     img_pil = Image.fromarray(img_cropped)
-    img_resized = img_pil.resize((20, 20), Image.Resampling.LANCZOS)
-    img_20x20 = np.array(img_resized)
+    img_resized = img_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    img_aspect = np.array(img_resized)
 
     # Center in 28x28 image
     img_28x28 = np.zeros((28, 28), dtype=np.uint8)
-    offset = 4  # Center the 20x20 in 28x28
-    img_28x28[offset:offset+20, offset:offset+20] = img_20x20
+
+    # Calculate offsets to center the resized image
+    offset_y = (28 - new_height) // 2
+    offset_x = (28 - new_width) // 2
+
+    img_28x28[offset_y:offset_y+new_height, offset_x:offset_x+new_width] = img_aspect
 
     # Normalize to [0, 1]
     img_normalized = img_28x28.astype(np.float32) / 255.0
