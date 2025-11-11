@@ -24,14 +24,33 @@ from mnist_shape_analysis import (
     analyze_stroke_features,
     generate_interpretation
 )
-from mnist_lrp_activation_max import (
-    LayerRelevancePropagation,
-    ActivationMaximization
-)
-from mnist_perturbation_analysis import (
-    OcclusionSensitivity,
-    RISE
-)
+from mnist_lrp_activation_max import LayerRelevancePropagation
+
+# Try to import CBN, LIME, and SHAP (may not be available if not trained/installed)
+try:
+    from mnist_cbn_model import (
+        create_cbn_model,
+        get_concept_names,
+        interpret_concepts,
+        explain_prediction_with_concepts,
+        get_concept_importance_for_class,
+        CONCEPT_NAMES
+    )
+    CBN_AVAILABLE = True
+except ImportError:
+    CBN_AVAILABLE = False
+
+try:
+    from mnist_lime_explainer import create_lime_explainer, MNISTLimeExplainer
+    LIME_AVAILABLE = True
+except ImportError:
+    LIME_AVAILABLE = False
+
+try:
+    from mnist_shap_explainer import create_shap_explainer, MNISTShapExplainer
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
 
 
 # Page configuration
@@ -108,12 +127,58 @@ def load_model():
 
 @st.cache_resource
 def load_xai_analyzers(_model):
-    """Load XAI analyzers (LRP, Activation Maximization, Perturbation)"""
+    """Load XAI analyzers (LRP)"""
     lrp = LayerRelevancePropagation(_model, epsilon=1e-10)
-    actmax = ActivationMaximization(_model)
-    occlusion = OcclusionSensitivity(_model)
-    rise = RISE(_model)
-    return lrp, actmax, occlusion, rise
+    return lrp
+
+
+@st.cache_resource
+def load_cbn_model():
+    """Load trained CBN model (if available)"""
+    if not CBN_AVAILABLE:
+        return None, None, None
+
+    model_path = 'mnist_cbn_model.pkl'
+
+    if not Path(model_path).exists():
+        return None, None, None
+
+    try:
+        with open(model_path, 'rb') as f:
+            checkpoint = pickle.load(f)
+
+        params = checkpoint['params']
+        batch_stats = checkpoint['batch_stats']
+        model = create_cbn_model(n_concepts=len(CONCEPT_NAMES), n_classes=10)
+
+        return params, batch_stats, model
+    except Exception as e:
+        st.warning(f"Could not load CBN model: {e}")
+        return None, None, None
+
+
+@st.cache_resource
+def load_lime_shap_explainers(_model, _params, _batch_stats):
+    """Load LIME and SHAP explainers"""
+    lime_explainer = None
+    shap_explainer = None
+
+    if LIME_AVAILABLE:
+        try:
+            lime_explainer = create_lime_explainer(_model, _params, _batch_stats)
+        except Exception as e:
+            st.warning(f"Could not create LIME explainer: {e}")
+
+    if SHAP_AVAILABLE:
+        try:
+            shap_explainer = create_shap_explainer(
+                _model, _params, _batch_stats,
+                explainer_type='gradient'
+            )
+        except Exception as e:
+            st.warning(f"Could not create SHAP explainer: {e}")
+
+    return lime_explainer, shap_explainer
 
 
 def preprocess_canvas_image(canvas_data):
@@ -203,8 +268,7 @@ def preprocess_canvas_image(canvas_data):
     return img_final
 
 
-def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, occlusion, rise,
-                       use_lrp=False, use_actmax=False, use_perturbation=False):
+def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False):
     """
     Make prediction and perform XAI analysis
 
@@ -238,41 +302,6 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, actmax, occlusio
         lrp_epsilon, _, _ = lrp.compute_lrp_epsilon_rule(params, batch_stats, image)
         results['lrp_relevance'] = lrp_relevance
         results['lrp_epsilon'] = lrp_epsilon
-
-    # Add Activation Maximization if requested
-    if use_actmax:
-        # Generate ideal image for predicted class
-        # Using fewer iterations and less frequent blur for faster computation
-        ideal_image, actmax_scores = actmax.maximize_class(
-            params, batch_stats, predicted_class,
-            n_iterations=150,  # Reduced from 200 for speed
-            learning_rate=1.0,
-            l2_reg=0.01,
-            blur_every=10,  # Less frequent blur for speed
-            blur_sigma=0.5,
-            seed=42
-        )
-        results['actmax_image'] = ideal_image
-        results['actmax_scores'] = actmax_scores
-
-    # Add Perturbation Analysis if requested
-    if use_perturbation:
-        # Occlusion Sensitivity (faster with larger stride)
-        occlusion_map, _, _ = occlusion.compute_occlusion_sensitivity(
-            params, batch_stats, image,
-            window_size=4,
-            stride=3  # Larger stride for faster computation
-        )
-        results['occlusion_map'] = occlusion_map
-
-        # RISE (fewer masks for speed)
-        rise_map, _, _ = rise.compute_rise_map(
-            params, batch_stats, image,
-            n_masks=500,  # Reduced from 1000 for speed
-            mask_prob=0.5,
-            mask_size=7
-        )
-        results['rise_map'] = rise_map
 
     return results
 
@@ -407,39 +436,33 @@ def plot_lrp_analysis(image, lrp_relevance, lrp_epsilon):
     return fig
 
 
-def plot_activation_maximization(image, actmax_image, predicted_class):
-    """Plot activation maximization comparison"""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+def plot_cbn_concepts(concepts, predicted_class):
+    """Plot CBN concept activations"""
+    fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Ensure 2D image
-    if image.ndim == 3:
-        img_2d = image.squeeze(-1)
-    else:
-        img_2d = image
+    concept_names = get_concept_names()
+    x_pos = np.arange(len(concepts))
 
-    # Your drawing
-    axes[0].imshow(img_2d, cmap='gray')
-    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
-    axes[0].axis('off')
+    colors = ['green' if c >= 0.5 else 'lightgray' for c in concepts]
+    bars = ax.barh(x_pos, concepts, color=colors)
 
-    # Generated ideal
-    axes[1].imshow(actmax_image, cmap='gray')
-    axes[1].set_title(f"Model's Ideal Digit '{predicted_class}'", fontsize=12, fontweight='bold')
-    axes[1].axis('off')
+    # Add threshold line
+    ax.axvline(x=0.5, color='red', linestyle='--', linewidth=2, label='Activation Threshold')
 
-    # Difference
-    diff = np.abs(img_2d - actmax_image)
-    im = axes[2].imshow(diff, cmap='hot')
-    axes[2].set_title('Difference\n(Your vs Ideal)', fontsize=12, fontweight='bold')
-    axes[2].axis('off')
-    plt.colorbar(im, ax=axes[2], fraction=0.046)
+    ax.set_yticks(x_pos)
+    ax.set_yticklabels(concept_names)
+    ax.set_xlabel('Concept Activation', fontsize=12, fontweight='bold')
+    ax.set_title(f'Concept Activations for Digit {predicted_class}', fontsize=14, fontweight='bold')
+    ax.set_xlim(0, 1)
+    ax.legend()
+    ax.grid(axis='x', alpha=0.3)
 
     plt.tight_layout()
     return fig
 
 
-def plot_perturbation_analysis(image, occlusion_map, rise_map):
-    """Plot perturbation-based analysis"""
+def plot_lime_explanation(image, lime_heatmap, predicted_class):
+    """Plot LIME explanation"""
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     # Ensure 2D image
@@ -448,22 +471,61 @@ def plot_perturbation_analysis(image, occlusion_map, rise_map):
     else:
         img_2d = image
 
-    # Original
+    # Original image
     axes[0].imshow(img_2d, cmap='gray')
     axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
     axes[0].axis('off')
 
-    # Occlusion sensitivity
-    im1 = axes[1].imshow(occlusion_map, cmap='hot')
-    axes[1].set_title('Occlusion Sensitivity\n(Mask and Measure)', fontsize=12, fontweight='bold')
+    # LIME heatmap
+    im = axes[1].imshow(lime_heatmap, cmap='RdYlGn')
+    axes[1].set_title(f'LIME Explanation\n(Class {predicted_class})', fontsize=12, fontweight='bold')
     axes[1].axis('off')
-    plt.colorbar(im1, ax=axes[1], fraction=0.046)
+    plt.colorbar(im, ax=axes[1], fraction=0.046)
 
-    # RISE
-    im2 = axes[2].imshow(rise_map, cmap='hot')
-    axes[2].set_title('RISE Map\n(Random Sampling)', fontsize=12, fontweight='bold')
+    # Overlay
+    axes[2].imshow(img_2d, cmap='gray', alpha=0.7)
+    axes[2].imshow(lime_heatmap, cmap='RdYlGn', alpha=0.5)
+    axes[2].set_title('LIME Overlay', fontsize=12, fontweight='bold')
     axes[2].axis('off')
-    plt.colorbar(im2, ax=axes[2], fraction=0.046)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_shap_explanation(image, shap_values, predicted_class):
+    """Plot SHAP explanation"""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Ensure 2D arrays
+    if image.ndim == 3:
+        img_2d = image.squeeze(-1)
+    else:
+        img_2d = image
+
+    if shap_values.ndim == 3:
+        shap_2d = shap_values.squeeze(-1)
+    else:
+        shap_2d = shap_values
+
+    # Original image
+    axes[0].imshow(img_2d, cmap='gray')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].axis('off')
+
+    # SHAP heatmap
+    vmax = np.abs(shap_2d).max()
+    im = axes[1].imshow(shap_2d, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[1].set_title(f'SHAP Values\n(Class {predicted_class})', fontsize=12, fontweight='bold')
+    axes[1].axis('off')
+    plt.colorbar(im, ax=axes[1], fraction=0.046)
+
+    # Overlay
+    shap_abs = np.abs(shap_2d)
+    shap_norm = shap_abs / (shap_abs.max() + 1e-10)
+    axes[2].imshow(img_2d, cmap='gray', alpha=0.7)
+    axes[2].imshow(shap_norm, cmap='hot', alpha=0.5)
+    axes[2].set_title('SHAP Overlay', fontsize=12, fontweight='bold')
+    axes[2].axis('off')
 
     plt.tight_layout()
     return fig
@@ -476,10 +538,18 @@ def main():
     st.markdown('<div class="main-header">✏️ MNIST XAI Drawing App</div>', unsafe_allow_html=True)
     st.markdown("Draw a digit and see real-time prediction with explainable AI analysis!")
 
-    # Load model
-    with st.spinner("Loading model..."):
+    # Load models and analyzers
+    with st.spinner("Loading models..."):
+        # Load main CNN model
         params, batch_stats, model = load_model()
-        lrp, actmax, occlusion, rise = load_xai_analyzers(model)
+        lrp = load_xai_analyzers(model)
+
+        # Load CBN model (if available)
+        cbn_params, cbn_batch_stats, cbn_model = load_cbn_model()
+        cbn_enabled = cbn_params is not None
+
+        # Load LIME and SHAP explainers
+        lime_explainer, shap_explainer = load_lime_shap_explainers(model, params, batch_stats)
 
     # Sidebar
     st.sidebar.title("⚙️ Settings")
@@ -492,13 +562,28 @@ def main():
 
     enable_lrp = st.sidebar.checkbox("Enable Layer Relevance Propagation (LRP)", value=False,
                                      help="Shows pixel-wise relevance scores for predictions")
-    enable_actmax = st.sidebar.checkbox("Enable Activation Maximization", value=False,
-                                       help="Generates ideal digit according to the model")
-    enable_perturbation = st.sidebar.checkbox("Enable Perturbation Analysis", value=False,
-                                             help="Tests importance by masking regions")
 
-    if enable_lrp or enable_actmax or enable_perturbation:
+    enable_cbn = st.sidebar.checkbox("Enable Concept Bottleneck Network", value=False,
+                                     help="Shows interpretable concept activations",
+                                     disabled=not cbn_enabled)
+
+    enable_lime = st.sidebar.checkbox("Enable LIME Explanations", value=False,
+                                      help="Local Interpretable Model-agnostic Explanations",
+                                      disabled=lime_explainer is None)
+
+    enable_shap = st.sidebar.checkbox("Enable SHAP Explanations", value=False,
+                                      help="SHapley Additive exPlanations",
+                                      disabled=shap_explainer is None)
+
+    if enable_lrp or enable_cbn or enable_lime or enable_shap:
         st.sidebar.info("⚠️ Advanced techniques may take longer to compute")
+
+    if not cbn_enabled:
+        st.sidebar.warning("⚠️ CBN model not available. Train the model first.")
+    if lime_explainer is None and LIME_AVAILABLE:
+        st.sidebar.warning("⚠️ LIME not available. Check dependencies.")
+    if shap_explainer is None and SHAP_AVAILABLE:
+        st.sidebar.warning("⚠️ SHAP not available. Check dependencies.")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📖 Instructions")
@@ -574,10 +659,8 @@ def main():
                     with st.spinner("Analyzing..."):
                         results = predict_and_analyze(
                             params, batch_stats, model, processed_image,
-                            lrp, actmax, occlusion, rise,
-                            use_lrp=enable_lrp,
-                            use_actmax=enable_actmax,
-                            use_perturbation=enable_perturbation
+                            lrp,
+                            use_lrp=enable_lrp
                         )
 
                     # Display results
@@ -600,10 +683,6 @@ def main():
                         # Add advanced tabs if enabled
                         if enable_lrp:
                             tab_names.append("🧬 LRP Analysis")
-                        if enable_actmax:
-                            tab_names.append("🎨 Activation Max")
-                        if enable_perturbation:
-                            tab_names.append("🎭 Perturbation")
 
                         tab_names.extend([
                             "📍 Regional Analysis",
@@ -684,100 +763,6 @@ def main():
                                 **Interpretation:** Bright red pixels had the strongest influence on
                                 the model predicting this as digit '{}'.
                                 """.format(results['predicted_class']))
-
-                        # Activation Maximization tab (conditional)
-                        if enable_actmax:
-                            with tabs[current_tab]:
-                                current_tab += 1
-                                st.markdown("### Activation Maximization")
-                                st.markdown(f"""
-                                What does the model think the "perfect" digit **{results['predicted_class']}** looks like?
-                                This visualization was generated by optimizing an image to maximize the model's
-                                confidence for this digit.
-                                """)
-
-                                fig_actmax = plot_activation_maximization(
-                                    processed_image,
-                                    results['actmax_image'],
-                                    results['predicted_class']
-                                )
-                                st.pyplot(fig_actmax)
-                                plt.close()
-
-                                st.markdown("""
-                                **How to read:**
-                                - **Your Drawing** (left): What you drew
-                                - **Model's Ideal** (middle): What the model thinks this digit should look like
-                                - **Difference** (right): Shows discrepancies (brighter = more different)
-
-                                **Interpretation:** The model's ideal representation highlights the key features
-                                it associates with this digit. Large differences suggest areas where your
-                                drawing deviates from the model's learned prototype.
-                                """)
-
-                                # Show optimization progress
-                                with st.expander("📈 View Optimization Progress"):
-                                    fig_progress = plt.figure(figsize=(10, 4))
-                                    plt.plot(results['actmax_scores'], linewidth=2, color='steelblue')
-                                    plt.xlabel('Iteration', fontsize=11)
-                                    plt.ylabel('Activation Score', fontsize=11)
-                                    plt.title(f"Activation Maximization for Digit {results['predicted_class']}",
-                                             fontsize=12, fontweight='bold')
-                                    plt.grid(True, alpha=0.3)
-                                    st.pyplot(fig_progress)
-                                    plt.close()
-
-                        # Perturbation Analysis tab (conditional)
-                        if enable_perturbation:
-                            with tabs[current_tab]:
-                                current_tab += 1
-                                st.markdown("### Perturbation-Based Analysis")
-                                st.markdown("""
-                                These methods test what happens when we mask or hide parts of the image.
-                                Regions that cause big drops in confidence when hidden are considered important.
-                                """)
-
-                                fig_pert = plot_perturbation_analysis(
-                                    processed_image,
-                                    results['occlusion_map'],
-                                    results['rise_map']
-                                )
-                                st.pyplot(fig_pert)
-                                plt.close()
-
-                                st.markdown("""
-                                **How to read:**
-                                - **Occlusion Sensitivity** (middle): Systematically masks regions with a sliding window.
-                                  Bright areas caused the biggest drop in confidence when hidden.
-                                - **RISE** (right): Uses random masks and averages results. More robust to noise.
-
-                                **Interpretation:** Both methods highlight critical features. If they agree,
-                                those features are definitely important for the prediction.
-                                """)
-
-                                # Comparison
-                                with st.expander("📊 Compare Methods"):
-                                    col1, col2 = st.columns(2)
-
-                                    with col1:
-                                        st.markdown("**Occlusion Sensitivity:**")
-                                        st.markdown(f"- Max importance: {results['occlusion_map'].max():.3f}")
-                                        st.markdown(f"- Mean importance: {results['occlusion_map'].mean():.3f}")
-                                        st.markdown("- Method: Deterministic sliding window")
-
-                                    with col2:
-                                        st.markdown("**RISE:**")
-                                        st.markdown(f"- Max importance: {results['rise_map'].max():.3f}")
-                                        st.markdown(f"- Mean importance: {results['rise_map'].mean():.3f}")
-                                        st.markdown("- Method: Random sampling (500 masks)")
-
-                                    # Correlation
-                                    correlation = np.corrcoef(
-                                        results['occlusion_map'].flatten(),
-                                        results['rise_map'].flatten()
-                                    )[0, 1]
-                                    st.info(f"📈 Correlation between methods: {correlation:.3f}\n\n"
-                                           f"High correlation (>0.7) means both methods agree on what's important.")
 
                         # Regional Analysis tab
                         with tabs[current_tab]:
@@ -965,7 +950,7 @@ Top 3 Predictions:
     st.markdown("""
     <div style="text-align: center; color: #666;">
         <p>Built with ❤️ using JAX, Flax, and Streamlit</p>
-        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, Activation Maximization, and Perturbation Analysis</p>
+        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, Concept Bottleneck Networks, LIME, and SHAP</p>
     </div>
     """, unsafe_allow_html=True)
 
