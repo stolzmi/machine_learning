@@ -16,6 +16,7 @@ import pickle
 from typing import Tuple, Dict, Any
 from mnist_cbn_model import create_cbn_model, CONCEPT_NAMES
 import time
+import tensorflow as tf 
 
 
 def load_mnist_data(batch_size: int = 128):
@@ -27,8 +28,8 @@ def load_mnist_data(batch_size: int = 128):
     def preprocess(sample):
         image = sample['image']
         label = sample['label']
-        # Normalize to [0, 1]
-        image = jnp.float32(image) / 255.0
+        # Normalize to [0, 1] using TensorFlow operations
+        image = tf.cast(image, tf.float32) / 255.0
         return image, label
 
     # Prepare training data
@@ -86,6 +87,9 @@ def train_step(state: TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray], rng):
     """Single training step"""
     images, labels = batch
 
+    # Split RNG for dropout
+    dropout_rng, new_rng = jax.random.split(rng)
+
     def loss_fn(params):
         # Forward pass with training mode
         variables = {'params': params, 'batch_stats': state.batch_stats}
@@ -93,7 +97,8 @@ def train_step(state: TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray], rng):
             variables,
             images,
             training=True,
-            mutable=['batch_stats']
+            mutable=['batch_stats'],
+            rngs={'dropout': dropout_rng}
         )
 
         # Cross-entropy loss
