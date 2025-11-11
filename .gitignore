@@ -66,3 +66,4 @@ htmlcov/
 
 # Streamlit
 .streamlit/secrets.toml
+training_log.txt
