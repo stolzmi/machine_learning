@@ -82,6 +82,33 @@ def create_train_state(rng, learning_rate: float = 1e-3):
     )
 
 
+def get_expected_concepts_for_digit(digit: int) -> jnp.ndarray:
+    """
+    Return expected concept activations for each digit
+    Based on visual features of MNIST digits
+
+    Concept indices:
+    0: Vertical Line, 1: Horizontal Line, 2: Loop/Circle,
+    3: Top Curve, 4: Bottom Curve, 5: Left Curve, 6: Right Curve,
+    7: Diagonal /, 8: Diagonal \, 9: Intersection, 10: Top Bar, 11: Bottom Bar
+    """
+    # Expected concepts (1 = should be active, 0 = should be inactive)
+    expected_concepts = {
+        0: [0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0],  # 0: Loop/Circle, curves
+        1: [1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],  # 1: Vertical line, diagonals
+        2: [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 1],  # 2: Horizontal, top curve, diagonal /, bars
+        3: [0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1, 1],  # 3: Horizontal, curves on right, bars
+        4: [1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0],  # 4: Vertical, diagonals, intersection
+        5: [0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1],  # 5: Horizontal, bottom curve, bars
+        6: [0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0],  # 6: Loop at bottom, left curve, top bar
+        7: [0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0],  # 7: Horizontal top, diagonals
+        8: [0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0],  # 8: Two loops, curves, intersection
+        9: [0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1],  # 9: Loop at top, right curve, bottom bar
+    }
+
+    return jnp.array(expected_concepts[digit], dtype=jnp.float32)
+
+
 @jax.jit
 def train_step(state: TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray], rng):
     """Single training step"""
@@ -104,19 +131,37 @@ def train_step(state: TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray], rng):
         # Cross-entropy loss
         ce_loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
 
-        # Concept sparsity regularization (L1) - encourages sparse activations
-        # We want concepts to be either clearly active (>0.7) or inactive (<0.3)
-        concept_sparsity = jnp.mean(jnp.minimum(concepts, 1 - concepts))
+        # Concept alignment loss - encourage concepts to match expected patterns for each digit
+        # Create expected concept matrix for the batch
+        batch_size = labels.shape[0]
+        expected_concepts = jnp.zeros((batch_size, 12), dtype=jnp.float32)
 
-        # Concept diversity regularization - encourages different concepts for different digits
-        # This prevents all concepts from being active for all inputs
-        concept_diversity = -jnp.var(concepts, axis=0).mean()
+        # Use a loop to set expected concepts based on labels
+        for digit in range(10):
+            mask = (labels == digit)
+            digit_expected = get_expected_concepts_for_digit(digit)
+            expected_concepts = jnp.where(
+                mask[:, None],  # Broadcast mask to concept dimension
+                digit_expected[None, :],  # Broadcast expected concepts to batch dimension
+                expected_concepts
+            )
+
+        # Binary cross-entropy loss between predicted and expected concepts
+        # Manually compute BCE since concepts are already sigmoid outputs
+        eps = 1e-7
+        concept_alignment_loss = -(
+            expected_concepts * jnp.log(concepts + eps) +
+            (1 - expected_concepts) * jnp.log(1 - concepts + eps)
+        ).mean()
+
+        # Concept sparsity regularization - encourages binary activations
+        concept_sparsity = jnp.mean(concepts * (1 - concepts))  # Minimized when concepts are 0 or 1
 
         # Total loss with regularization
-        lambda_sparsity = 0.01  # Sparsity weight
-        lambda_diversity = 0.005  # Diversity weight
+        lambda_alignment = 0.5  # Concept alignment weight (strong)
+        lambda_sparsity = 0.1   # Sparsity weight (medium)
 
-        loss = ce_loss + lambda_sparsity * concept_sparsity + lambda_diversity * concept_diversity
+        loss = ce_loss + lambda_alignment * concept_alignment_loss + lambda_sparsity * concept_sparsity
 
         # Compute accuracy
         predictions = jnp.argmax(logits, axis=-1)
