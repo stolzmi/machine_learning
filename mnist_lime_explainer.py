@@ -73,9 +73,14 @@ class MNISTLimeExplainer:
             predictions = []
 
             for img in images:
-                # Ensure proper shape [28, 28, 1]
-                if len(img.shape) == 2:
+                # Handle RGB images from LIME (convert to grayscale)
+                if len(img.shape) == 3 and img.shape[-1] == 3:
+                    # Convert RGB to grayscale
+                    img = np.mean(img, axis=-1, keepdims=True)
+                elif len(img.shape) == 2:
+                    # Add channel dimension for grayscale
                     img = img[:, :, np.newaxis]
+                # If already [H, W, 1], keep as is
 
                 # Get prediction
                 pred = self.predict_fn(img)
