@@ -14,8 +14,8 @@ dist/
 build/
 
 # Model files (may be too large for git)
-# Comment these out if using Git LFS
-*.pkl
+# MNIST model is small enough (~1.2MB), so we allow it
+# *.pkl
 *.h5
 *.pth
 *.ckpt
