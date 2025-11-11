@@ -268,7 +268,10 @@ def preprocess_canvas_image(canvas_data):
     return img_final
 
 
-def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False):
+def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False,
+                       cbn_model=None, cbn_params=None, cbn_batch_stats=None, use_cbn=False,
+                       lime_explainer=None, use_lime=False,
+                       shap_explainer=None, use_shap=False):
     """
     Make prediction and perform XAI analysis
 
@@ -302,6 +305,26 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False):
         lrp_epsilon, _, _ = lrp.compute_lrp_epsilon_rule(params, batch_stats, image)
         results['lrp_relevance'] = lrp_relevance
         results['lrp_epsilon'] = lrp_epsilon
+
+    # Add CBN analysis if requested
+    if use_cbn and cbn_model is not None:
+        cbn_variables = {'params': cbn_params, 'batch_stats': cbn_batch_stats}
+        cbn_logits, concepts = cbn_model.apply(cbn_variables, jnp.expand_dims(image, 0), training=False)
+        results['cbn_concepts'] = np.array(concepts[0])
+        results['cbn_logits'] = np.array(cbn_logits[0])
+        results['cbn_probs'] = np.array(jax.nn.softmax(cbn_logits[0]))
+
+    # Add LIME analysis if requested
+    if use_lime and lime_explainer is not None:
+        lime_exp = lime_explainer.explain_instance(image, predicted_class)
+        lime_heatmap = lime_explainer.visualize_explanation(lime_exp, show_plot=False)
+        results['lime_explanation'] = lime_exp
+        results['lime_heatmap'] = lime_heatmap
+
+    # Add SHAP analysis if requested
+    if use_shap and shap_explainer is not None:
+        shap_values = shap_explainer.explain_instance(image, predicted_class)
+        results['shap_values'] = shap_values
 
     return results
 
@@ -660,7 +683,15 @@ def main():
                         results = predict_and_analyze(
                             params, batch_stats, model, processed_image,
                             lrp,
-                            use_lrp=enable_lrp
+                            use_lrp=enable_lrp,
+                            cbn_model=cbn_model,
+                            cbn_params=cbn_params,
+                            cbn_batch_stats=cbn_batch_stats,
+                            use_cbn=enable_cbn,
+                            lime_explainer=lime_explainer,
+                            use_lime=enable_lime,
+                            shap_explainer=shap_explainer,
+                            use_shap=enable_shap
                         )
 
                     # Display results
@@ -683,6 +714,12 @@ def main():
                         # Add advanced tabs if enabled
                         if enable_lrp:
                             tab_names.append("🧬 LRP Analysis")
+                        if enable_cbn:
+                            tab_names.append("🧠 CBN Concepts")
+                        if enable_lime:
+                            tab_names.append("🔦 LIME Analysis")
+                        if enable_shap:
+                            tab_names.append("🎯 SHAP Analysis")
 
                         tab_names.extend([
                             "📍 Regional Analysis",
@@ -763,6 +800,165 @@ def main():
                                 **Interpretation:** Bright red pixels had the strongest influence on
                                 the model predicting this as digit '{}'.
                                 """.format(results['predicted_class']))
+
+                        # CBN Concepts tab (conditional)
+                        if enable_cbn:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### Concept Bottleneck Network Analysis")
+                                st.markdown("""
+                                CBN learns interpretable visual concepts as intermediate representations.
+                                The model makes predictions based on these human-understandable concepts.
+                                """)
+
+                                # Plot CBN concepts
+                                fig_cbn = plot_cbn_concepts(results['cbn_concepts'], results['predicted_class'])
+                                st.pyplot(fig_cbn)
+                                plt.close()
+
+                                st.markdown("---")
+                                st.markdown("### Active Concepts (>50% activation)")
+
+                                # Show active concepts
+                                active_concepts_data = interpret_concepts(results['cbn_concepts'], threshold=0.5)
+                                active_concepts_list = [(name, val) for name, val in active_concepts_data.items() if val >= 0.5]
+
+                                if active_concepts_list:
+                                    for name, value in sorted(active_concepts_list, key=lambda x: x[1], reverse=True):
+                                        st.markdown(f"- **{name}**: {value:.3f} ({'✅ Active' if value >= 0.5 else ''})")
+                                else:
+                                    st.info("No concepts strongly activated (all below 0.5 threshold)")
+
+                                st.markdown("---")
+                                st.markdown("### Top 5 Concepts by Activation")
+
+                                # Show top 5 concepts
+                                top_concepts = sorted(active_concepts_data.items(), key=lambda x: x[1], reverse=True)[:5]
+                                for i, (name, value) in enumerate(top_concepts, 1):
+                                    st.markdown(f"{i}. **{name}**: {value:.3f}")
+
+                                st.markdown("---")
+                                st.markdown("### CBN Prediction Comparison")
+
+                                col_cbn_a, col_cbn_b = st.columns(2)
+
+                                with col_cbn_a:
+                                    st.markdown("**Standard CNN:**")
+                                    st.markdown(f"- Predicted: **{results['predicted_class']}**")
+                                    st.markdown(f"- Confidence: **{results['probabilities'][results['predicted_class']]:.2%}**")
+
+                                with col_cbn_b:
+                                    cbn_predicted = int(np.argmax(results['cbn_probs']))
+                                    st.markdown("**CBN (via concepts):**")
+                                    st.markdown(f"- Predicted: **{cbn_predicted}**")
+                                    st.markdown(f"- Confidence: **{results['cbn_probs'][cbn_predicted]:.2%}**")
+
+                                if results['predicted_class'] == cbn_predicted:
+                                    st.success("✅ Both models agree on the prediction!")
+                                else:
+                                    st.warning(f"⚠️ Models disagree: CNN says {results['predicted_class']}, CBN says {cbn_predicted}")
+
+                                st.markdown("""
+                                **Why CBN is Interpretable:**
+                                - Shows which visual concepts (curves, lines, etc.) the model detects
+                                - Predictions are based on these interpretable concepts
+                                - Helps understand what features the model uses for classification
+                                """)
+
+                        # LIME Analysis tab (conditional)
+                        if enable_lime:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### LIME (Local Interpretable Model-agnostic Explanations)")
+                                st.markdown("""
+                                LIME explains individual predictions by approximating the model locally
+                                with an interpretable model. It shows which regions contribute positively
+                                or negatively to the prediction.
+                                """)
+
+                                # Plot LIME explanation
+                                fig_lime = plot_lime_explanation(
+                                    processed_image,
+                                    results['lime_heatmap'],
+                                    results['predicted_class']
+                                )
+                                st.pyplot(fig_lime)
+                                plt.close()
+
+                                st.markdown("""
+                                **How to read:**
+                                - **Green regions**: Contribute positively to the predicted class
+                                - **Red regions**: Contribute negatively (evidence against the prediction)
+                                - **Yellow/White**: Neutral regions with little influence
+
+                                **Interpretation:** LIME identifies which superpixels (image regions)
+                                are most important for predicting digit '{}'. Green areas support
+                                the prediction, while red areas oppose it.
+                                """.format(results['predicted_class']))
+
+                                # Get top features from LIME
+                                st.markdown("---")
+                                st.markdown("### Top Contributing Regions")
+
+                                lime_dict = results['lime_explanation'].as_list()
+                                st.markdown("**Most Important Superpixels:**")
+                                for i, (feature, weight) in enumerate(lime_dict[:5], 1):
+                                    contribution = "Positive" if weight > 0 else "Negative"
+                                    color = "green" if weight > 0 else "red"
+                                    st.markdown(f"{i}. Region {feature}: **{weight:.4f}** "
+                                              f"<span style='color:{color}'>({contribution})</span>",
+                                              unsafe_allow_html=True)
+
+                        # SHAP Analysis tab (conditional)
+                        if enable_shap:
+                            with tabs[current_tab]:
+                                current_tab += 1
+                                st.markdown("### SHAP (SHapley Additive exPlanations)")
+                                st.markdown("""
+                                SHAP values represent the contribution of each pixel to the prediction,
+                                based on game theory. They provide a unified measure of feature importance.
+                                """)
+
+                                # Plot SHAP explanation
+                                fig_shap = plot_shap_explanation(
+                                    processed_image,
+                                    results['shap_values'],
+                                    results['predicted_class']
+                                )
+                                st.pyplot(fig_shap)
+                                plt.close()
+
+                                st.markdown("""
+                                **How to read:**
+                                - **Red pixels**: Positive contribution (increase prediction probability)
+                                - **Blue pixels**: Negative contribution (decrease prediction probability)
+                                - **White pixels**: No significant contribution
+
+                                **Interpretation:** SHAP values show the exact contribution of each pixel
+                                to predicting digit '{}'. Brighter red means stronger positive contribution.
+                                """.format(results['predicted_class']))
+
+                                # SHAP statistics
+                                st.markdown("---")
+                                st.markdown("### SHAP Value Statistics")
+
+                                shap_array = results['shap_values'].flatten()
+                                col_shap_a, col_shap_b, col_shap_c = st.columns(3)
+
+                                with col_shap_a:
+                                    st.metric("Max Positive", f"{shap_array.max():.4f}")
+                                with col_shap_b:
+                                    st.metric("Max Negative", f"{shap_array.min():.4f}")
+                                with col_shap_c:
+                                    st.metric("Mean Absolute", f"{np.abs(shap_array).mean():.4f}")
+
+                                st.markdown("""
+                                **Why SHAP is Useful:**
+                                - Theoretically grounded in game theory
+                                - Consistent and locally accurate
+                                - Provides both positive and negative contributions
+                                - Works with any machine learning model
+                                """)
 
                         # Regional Analysis tab
                         with tabs[current_tab]:
