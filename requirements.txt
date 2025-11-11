@@ -21,3 +21,8 @@ tqdm>=4.65.0
 
 # Streamlit drawing canvas
 streamlit-drawable-canvas>=0.9.0
+
+# XAI Libraries
+lime>=0.2.0
+shap>=0.42.0
+scikit-learn>=1.3.0
