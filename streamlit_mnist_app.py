@@ -80,13 +80,28 @@ MNIST_DIGITS = [str(i) for i in range(10)]
 
 @st.cache_resource
 def load_model():
-    """Load trained MNIST model"""
+    """Load trained MNIST model, train if not exists"""
     model_path = 'mnist_model.pkl'
 
     if not Path(model_path).exists():
-        st.error(f"Model file '{model_path}' not found!")
-        st.info("Please train the model first: python train_mnist.py")
-        st.stop()
+        st.warning(f"Model file '{model_path}' not found. Training now...")
+        st.info("⏳ This will take 5-10 minutes on first run. The model will be cached for future use!")
+
+        # Import training function
+        from train_mnist import train_model
+
+        # Train with reduced epochs for faster deployment
+        with st.spinner("🏋️ Training MNIST model... Please wait..."):
+            try:
+                state, history, model = train_model(
+                    num_epochs=10,  # Reduced from 20 for faster training
+                    batch_size=128,
+                    save_path=model_path
+                )
+                st.success("✅ Model trained successfully!")
+            except Exception as e:
+                st.error(f"❌ Training failed: {str(e)}")
+                st.stop()
 
     with open(model_path, 'rb') as f:
         checkpoint = pickle.load(f)
