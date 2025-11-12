@@ -196,16 +196,11 @@ class MNISTLimeExplainer:
             # Add the weighted contribution to the heatmap
             heatmap[feature_mask] = weight
 
-        # Normalize heatmap to [-1, 1] or [0, 1] depending on positive_only
-        if positive_only:
-            heatmap = np.maximum(heatmap, 0)
-            if heatmap.max() > 0:
-                heatmap = heatmap / heatmap.max()
-        else:
-            # Keep both positive and negative contributions
-            max_abs = np.abs(heatmap).max()
-            if max_abs > 0:
-                heatmap = heatmap / max_abs  # Range: [-1, 1]
+        # Normalize heatmap to [0, 1] for visualization
+        # Take absolute value to show importance regardless of sign
+        heatmap = np.abs(heatmap)
+        if heatmap.max() > 0:
+            heatmap = heatmap / heatmap.max()
 
         # Create boundaries visualization
         boundaries = mark_boundaries(image, segments)

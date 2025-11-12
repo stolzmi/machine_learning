@@ -486,7 +486,7 @@ def plot_cbn_concepts(concepts, predicted_class):
 
 
 def plot_lime_explanation(image, lime_heatmap, predicted_class):
-    """Plot LIME explanation with weighted heatmap"""
+    """Plot LIME explanation"""
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     # Ensure 2D image
@@ -497,25 +497,19 @@ def plot_lime_explanation(image, lime_heatmap, predicted_class):
 
     # Original image
     axes[0].imshow(img_2d, cmap='gray')
-    axes[0].set_title('Original Image', fontsize=12, fontweight='bold')
+    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
     axes[0].axis('off')
 
-    # LIME heatmap - use RdBu_r for diverging colormap (red=positive, blue=negative)
-    vmax = np.abs(lime_heatmap).max()
-    im = axes[1].imshow(lime_heatmap, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-    axes[1].set_title(f'LIME Feature Importance\n(Digit {predicted_class})', fontsize=12, fontweight='bold')
+    # LIME heatmap
+    im = axes[1].imshow(lime_heatmap, cmap='hot')
+    axes[1].set_title(f'LIME Analysis\n(Class {predicted_class})', fontsize=12, fontweight='bold')
     axes[1].axis('off')
-    cbar = plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
-    cbar.set_label('Importance', rotation=270, labelpad=15)
+    plt.colorbar(im, ax=axes[1], fraction=0.046)
 
-    # Overlay - show only positive contributions overlaid on original
-    overlay_heatmap = np.maximum(lime_heatmap, 0)  # Only positive
-    if overlay_heatmap.max() > 0:
-        overlay_heatmap = overlay_heatmap / overlay_heatmap.max()
-
-    axes[2].imshow(img_2d, cmap='gray', alpha=0.6)
-    im_overlay = axes[2].imshow(overlay_heatmap, cmap='hot', alpha=0.6)
-    axes[2].set_title('Positive Contributions\n(Overlay)', fontsize=12, fontweight='bold')
+    # Overlay
+    axes[2].imshow(img_2d, cmap='gray', alpha=0.7)
+    axes[2].imshow(lime_heatmap, cmap='hot', alpha=0.5)
+    axes[2].set_title('LIME Overlay', fontsize=12, fontweight='bold')
     axes[2].axis('off')
 
     plt.tight_layout()
@@ -894,16 +888,12 @@ def main():
 
                                 st.markdown("""
                                 **How to read:**
-                                - **Left**: Original digit image
-                                - **Middle**: LIME feature importance heatmap
-                                  - **Red regions**: Positive contribution (support the prediction)
-                                  - **Blue regions**: Negative contribution (oppose the prediction)
-                                  - **White**: Neutral regions
-                                - **Right**: Overlay showing only positive contributions (hot colormap)
+                                - **Your Drawing**: Processed to 28×28 MNIST format
+                                - **LIME Analysis** (middle): Shows which regions are important (bright = high importance)
+                                - **LIME Overlay** (right): Important regions highlighted on original image
 
-                                **Interpretation:** LIME segments the image into superpixels and shows which
-                                regions contribute most to predicting digit '{}'. Red areas in the middle panel
-                                strongly support the prediction, while blue areas oppose it.
+                                **Interpretation:** LIME identifies which superpixels (regions) contribute most
+                                to predicting digit '{}'. Brighter areas have stronger influence on the prediction.
                                 """.format(results['predicted_class']))
 
                                 # Get top features from LIME
