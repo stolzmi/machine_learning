@@ -317,7 +317,8 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False,
     # Add LIME analysis if requested
     if use_lime and lime_explainer is not None:
         lime_exp = lime_explainer.explain_instance(image, predicted_class)
-        lime_heatmap = lime_explainer.visualize_explanation(lime_exp, show_plot=False)
+        # visualize_explanation returns (heatmap, boundary_image)
+        lime_heatmap, _ = lime_explainer.visualize_explanation(image, lime_exp, predicted_class)
         results['lime_explanation'] = lime_exp
         results['lime_heatmap'] = lime_heatmap
 
