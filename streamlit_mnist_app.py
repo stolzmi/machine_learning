@@ -901,7 +901,8 @@ def main():
                                 st.markdown("---")
                                 st.markdown("### Top Contributing Regions")
 
-                                lime_dict = results['lime_explanation'].as_list()
+                                # Get explanation for the predicted class
+                                lime_dict = results['lime_explanation'].as_list(label=results['predicted_class'])
                                 st.markdown("**Most Important Superpixels:**")
                                 for i, (feature, weight) in enumerate(lime_dict[:5], 1):
                                     contribution = "Positive" if weight > 0 else "Negative"
