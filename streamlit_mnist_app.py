@@ -314,25 +314,12 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False,
         results['cbn_logits'] = np.array(cbn_logits[0])
         results['cbn_probs'] = np.array(jax.nn.softmax(cbn_logits[0]))
 
-    # Add LIME (Activation Maximization) analysis if requested
+    # Add LIME analysis if requested
     if use_lime and lime_explainer is not None:
-        # Use activation maximization to generate the "ideal" image for this class
-        from mnist_lrp_activation_max import ActivationMaximization
-        actmax = ActivationMaximization(model)
-
-        # Generate image that maximizes the predicted class
-        ideal_image, scores = actmax.maximize_class(
-            params, batch_stats, predicted_class,
-            n_iterations=150,
-            learning_rate=1.0,
-            l2_reg=0.005,
-            blur_every=10,
-            blur_sigma=0.5,
-            seed=42
-        )
-
-        results['lime_heatmap'] = ideal_image.squeeze()
-        results['lime_score'] = scores[-1]
+        lime_exp = lime_explainer.explain_instance(image, predicted_class)
+        lime_heatmap = lime_explainer.get_image_and_mask(lime_exp, predicted_class)
+        results['lime_explanation'] = lime_exp
+        results['lime_heatmap'] = lime_heatmap
 
     # Add SHAP analysis if requested
     if use_shap and shap_explainer is not None:
@@ -498,7 +485,7 @@ def plot_cbn_concepts(concepts, predicted_class):
 
 
 def plot_lime_explanation(image, lime_heatmap, predicted_class):
-    """Plot LIME (Activation Maximization) explanation"""
+    """Plot LIME explanation"""
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     # Ensure 2D image
@@ -507,22 +494,27 @@ def plot_lime_explanation(image, lime_heatmap, predicted_class):
     else:
         img_2d = image
 
-    # Original drawing
+    # Original image
     axes[0].imshow(img_2d, cmap='gray')
-    axes[0].set_title('Your Drawing', fontsize=12, fontweight='bold')
+    axes[0].set_title('Original Image', fontsize=12, fontweight='bold')
     axes[0].axis('off')
 
-    # Generated "ideal" digit
-    axes[1].imshow(lime_heatmap, cmap='gray')
-    axes[1].set_title(f'LIME: Ideal Digit {predicted_class}', fontsize=12, fontweight='bold')
+    # LIME heatmap
+    im = axes[1].imshow(lime_heatmap, cmap='RdBu_r', vmin=-1, vmax=1)
+    axes[1].set_title(f'LIME Explanation', fontsize=12, fontweight='bold')
     axes[1].axis('off')
+    plt.colorbar(im, ax=axes[1], fraction=0.046)
 
-    # Difference/comparison overlay
-    diff = np.abs(img_2d - lime_heatmap)
-    im = axes[2].imshow(diff, cmap='hot')
-    axes[2].set_title('Difference Map', fontsize=12, fontweight='bold')
+    # Overlay
+    # Create a weighted overlay
+    overlay = img_2d.copy()
+    # Normalize heatmap for overlay
+    heatmap_normalized = (lime_heatmap + 1) / 2  # Convert from [-1,1] to [0,1]
+
+    axes[2].imshow(overlay, cmap='gray', alpha=0.7)
+    axes[2].imshow(heatmap_normalized, cmap='hot', alpha=0.3)
+    axes[2].set_title('LIME Overlay', fontsize=12, fontweight='bold')
     axes[2].axis('off')
-    plt.colorbar(im, ax=axes[2], fraction=0.046)
 
     plt.tight_layout()
     return fig
@@ -882,11 +874,11 @@ def main():
                         if enable_lime:
                             with tabs[current_tab]:
                                 current_tab += 1
-                                st.markdown("### LIME (Feature Visualization)")
+                                st.markdown("### LIME (Local Interpretable Model-agnostic Explanations)")
                                 st.markdown("""
-                                This visualization uses activation maximization to generate an "ideal" version
-                                of the predicted digit according to the model. It helps you understand what
-                                features the model expects to see for this digit class.
+                                LIME explains individual predictions by approximating the model locally
+                                with an interpretable model. It shows which regions contribute positively
+                                or negatively to the prediction.
                                 """)
 
                                 # Plot LIME explanation
@@ -900,24 +892,39 @@ def main():
 
                                 st.markdown("""
                                 **How to read:**
-                                - **Your Drawing**: Your input processed to 28×28 MNIST format
-                                - **Ideal Digit {}**: What the model considers the "perfect" version of this digit
-                                - **Difference Map**: Shows where your drawing differs from the model's ideal (brighter = more different)
+                                - **Original Image**: Your drawing processed to 28×28 MNIST format
+                                - **LIME Explanation**: Heatmap showing important regions (red = positive, blue = negative)
+                                - **LIME Overlay**: Important regions highlighted on original image
 
-                                **Interpretation:** By comparing your drawing to the model's ideal representation,
-                                you can see which features the model expects for digit '{}' and how your input
-                                matches or differs from those expectations.
-                                """.format(results['predicted_class'], results['predicted_class']))
+                                **Interpretation:** LIME identifies which superpixels (regions) contribute most
+                                to predicting digit '{}'. Red areas support the prediction, blue areas argue against it.
+                                """.format(results['predicted_class']))
 
-                                # Display optimization score
+                                # Get top features from LIME
                                 st.markdown("---")
-                                st.markdown("### Generation Quality")
-                                if 'lime_score' in results:
-                                    st.markdown(f"**Activation Score**: {results['lime_score']:.3f}")
-                                    st.markdown("""
-                                    This score indicates how confidently the model classifies the generated ideal image.
-                                    Higher scores mean the model is very confident this is what the digit should look like.
-                                    """)
+                                st.markdown("### Top Contributing Regions")
+
+                                # Get explanation for the predicted class
+                                try:
+                                    # Try to get local explanation
+                                    lime_exp_obj = results['lime_explanation']
+                                    if hasattr(lime_exp_obj, 'local_exp') and results['predicted_class'] in lime_exp_obj.local_exp:
+                                        # local_exp is a dict: {label: [(feature_id, weight), ...]}
+                                        lime_features = lime_exp_obj.local_exp[results['predicted_class']]
+                                        # Sort by absolute weight
+                                        lime_features_sorted = sorted(lime_features, key=lambda x: abs(x[1]), reverse=True)
+
+                                        st.markdown("**Most Important Superpixels:**")
+                                        for i, (feature, weight) in enumerate(lime_features_sorted[:5], 1):
+                                            contribution = "Positive" if weight > 0 else "Negative"
+                                            color = "green" if weight > 0 else "red"
+                                            st.markdown(f"{i}. Superpixel {feature}: **{weight:.4f}** "
+                                                      f"<span style='color:{color}'>({contribution})</span>",
+                                                      unsafe_allow_html=True)
+                                    else:
+                                        st.info("LIME explanation details not available")
+                                except Exception as e:
+                                    st.warning(f"Could not extract LIME features: {e}")
 
                         # SHAP Analysis tab (conditional)
                         if enable_shap:
