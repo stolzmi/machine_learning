@@ -151,12 +151,12 @@ class MNISTLimeExplainer:
         image: np.ndarray,
         explanation: object,
         label: int,
-        positive_only: bool = True,
-        num_features: int = 5,
+        positive_only: bool = False,
+        num_features: int = 10,
         hide_rest: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Visualize LIME explanation
+        Visualize LIME explanation as a weighted heatmap
 
         Args:
             image: Original input image
@@ -177,23 +177,38 @@ class MNISTLimeExplainer:
         if isinstance(image, jnp.ndarray):
             image = np.array(image)
 
-        # Get image and mask
-        temp, mask = explanation.get_image_and_mask(
-            label,
-            positive_only=positive_only,
-            num_features=num_features,
-            hide_rest=hide_rest
-        )
+        # Get the segments used in the explanation
+        segments = explanation.segments
 
-        # Create heatmap visualization
-        heatmap = mask.astype(np.float32)
+        # Get local explanation (feature importances)
+        if label not in explanation.local_exp:
+            # Fallback to first available label
+            label = list(explanation.local_exp.keys())[0]
 
-        # Normalize heatmap
-        if heatmap.max() > 0:
-            heatmap = heatmap / heatmap.max()
+        local_exp = explanation.local_exp[label]
+
+        # Create weighted heatmap based on feature importances
+        heatmap = np.zeros(image.shape, dtype=np.float32)
+
+        for feature_id, weight in local_exp:
+            # Get the mask for this feature (superpixel)
+            feature_mask = (segments == feature_id)
+            # Add the weighted contribution to the heatmap
+            heatmap[feature_mask] = weight
+
+        # Normalize heatmap to [-1, 1] or [0, 1] depending on positive_only
+        if positive_only:
+            heatmap = np.maximum(heatmap, 0)
+            if heatmap.max() > 0:
+                heatmap = heatmap / heatmap.max()
+        else:
+            # Keep both positive and negative contributions
+            max_abs = np.abs(heatmap).max()
+            if max_abs > 0:
+                heatmap = heatmap / max_abs  # Range: [-1, 1]
 
         # Create boundaries visualization
-        boundaries = mark_boundaries(image, mask)
+        boundaries = mark_boundaries(image, segments)
 
         return heatmap, boundaries
 
