@@ -902,14 +902,26 @@ def main():
                                 st.markdown("### Top Contributing Regions")
 
                                 # Get explanation for the predicted class
-                                lime_dict = results['lime_explanation'].as_list(label=results['predicted_class'])
-                                st.markdown("**Most Important Superpixels:**")
-                                for i, (feature, weight) in enumerate(lime_dict[:5], 1):
-                                    contribution = "Positive" if weight > 0 else "Negative"
-                                    color = "green" if weight > 0 else "red"
-                                    st.markdown(f"{i}. Region {feature}: **{weight:.4f}** "
-                                              f"<span style='color:{color}'>({contribution})</span>",
-                                              unsafe_allow_html=True)
+                                try:
+                                    # Try to get local explanation
+                                    lime_exp_obj = results['lime_explanation']
+                                    if hasattr(lime_exp_obj, 'local_exp') and results['predicted_class'] in lime_exp_obj.local_exp:
+                                        # local_exp is a dict: {label: [(feature_id, weight), ...]}
+                                        lime_features = lime_exp_obj.local_exp[results['predicted_class']]
+                                        # Sort by absolute weight
+                                        lime_features_sorted = sorted(lime_features, key=lambda x: abs(x[1]), reverse=True)
+
+                                        st.markdown("**Most Important Superpixels:**")
+                                        for i, (feature, weight) in enumerate(lime_features_sorted[:5], 1):
+                                            contribution = "Positive" if weight > 0 else "Negative"
+                                            color = "green" if weight > 0 else "red"
+                                            st.markdown(f"{i}. Superpixel {feature}: **{weight:.4f}** "
+                                                      f"<span style='color:{color}'>({contribution})</span>",
+                                                      unsafe_allow_html=True)
+                                    else:
+                                        st.info("LIME explanation details not available")
+                                except Exception as e:
+                                    st.warning(f"Could not extract LIME features: {e}")
 
                         # SHAP Analysis tab (conditional)
                         if enable_shap:
