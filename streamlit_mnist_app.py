@@ -1,6 +1,6 @@
 """
-Interactive MNIST XAI App with Drawing Canvas
-Draw a digit and see real-time prediction with XAI analysis!
+MNIST Digit Recognition with Explainable AI
+Interactive app for drawing digits and analyzing neural network predictions
 """
 
 import streamlit as st
@@ -55,48 +55,64 @@ except ImportError:
 
 # Page configuration
 st.set_page_config(
-    page_title="MNIST XAI Drawing App",
-    page_icon="✏️",
+    page_title="Digit Recognition | XAI",
+    page_icon="🔢",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS for modern, clean look
 st.markdown("""
 <style>
     .main-header {
-        font-size: 3rem;
-        font-weight: bold;
+        font-size: 2.5rem;
+        font-weight: 600;
         text-align: center;
-        color: #1f77b4;
-        margin-bottom: 1rem;
+        color: #2c3e50;
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.5px;
     }
     .sub-header {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #2ca02c;
-        margin-top: 1rem;
-    }
-    .metric-box {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+        font-size: 1.25rem;
+        font-weight: 500;
+        color: #34495e;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        border-bottom: 2px solid #ecf0f1;
+        padding-bottom: 0.5rem;
     }
     .prediction-box {
-        background-color: #e8f4f8;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        border: 2px solid #1f77b4;
-        margin: 1rem 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 12px;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .prediction-box h2 {
+        color: white !important;
+        margin: 0;
+    }
+    .prediction-box h3 {
+        color: rgba(255, 255, 255, 0.9) !important;
+        margin-top: 0.5rem;
+        font-weight: 400;
     }
     .interpretation-box {
-        background-color: #fff9e6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border: 1px solid #ffcc00;
+        background-color: #f8f9fa;
+        padding: 1.25rem;
+        border-radius: 8px;
+        border-left: 4px solid #667eea;
         margin: 1rem 0;
-        font-family: monospace;
+        line-height: 1.6;
+    }
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        padding: 12px 20px;
+        font-weight: 500;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -316,8 +332,9 @@ def predict_and_analyze(params, batch_stats, model, image, lrp, use_lrp=False,
 
     # Add LIME analysis if requested
     if use_lime and lime_explainer is not None:
-        lime_exp = lime_explainer.explain_instance(image, predicted_class)
-        lime_heatmap = lime_explainer.get_image_and_mask(lime_exp, predicted_class)
+        lime_exp = lime_explainer.explain_instance(image, top_labels=2, num_samples=500, num_features=10)
+        # Get the heatmap using visualize_explanation method
+        lime_heatmap, _ = lime_explainer.visualize_explanation(image, lime_exp, predicted_class, num_features=10)
         results['lime_explanation'] = lime_exp
         results['lime_heatmap'] = lime_heatmap
 
@@ -499,20 +516,15 @@ def plot_lime_explanation(image, lime_heatmap, predicted_class):
     axes[0].set_title('Original Image', fontsize=12, fontweight='bold')
     axes[0].axis('off')
 
-    # LIME heatmap
-    im = axes[1].imshow(lime_heatmap, cmap='RdBu_r', vmin=-1, vmax=1)
+    # LIME heatmap (already normalized to [0, 1])
+    im = axes[1].imshow(lime_heatmap, cmap='hot')
     axes[1].set_title(f'LIME Explanation', fontsize=12, fontweight='bold')
     axes[1].axis('off')
     plt.colorbar(im, ax=axes[1], fraction=0.046)
 
     # Overlay
-    # Create a weighted overlay
-    overlay = img_2d.copy()
-    # Normalize heatmap for overlay
-    heatmap_normalized = (lime_heatmap + 1) / 2  # Convert from [-1,1] to [0,1]
-
-    axes[2].imshow(overlay, cmap='gray', alpha=0.7)
-    axes[2].imshow(heatmap_normalized, cmap='hot', alpha=0.3)
+    axes[2].imshow(img_2d, cmap='gray', alpha=0.7)
+    axes[2].imshow(lime_heatmap, cmap='hot', alpha=0.4)
     axes[2].set_title('LIME Overlay', fontsize=12, fontweight='bold')
     axes[2].axis('off')
 
@@ -563,8 +575,8 @@ def main():
     """Main Streamlit app"""
 
     # Header
-    st.markdown('<div class="main-header">✏️ MNIST XAI Drawing App</div>', unsafe_allow_html=True)
-    st.markdown("Draw a digit and see real-time prediction with explainable AI analysis!")
+    st.markdown('<div class="main-header">Digit Recognition with Explainable AI</div>', unsafe_allow_html=True)
+    st.markdown('<p style="text-align: center; color: #7f8c8d; margin-bottom: 2rem;">Draw a digit to analyze how neural networks make predictions</p>', unsafe_allow_html=True)
 
     # Load models and analyzers
     with st.spinner("Loading models..."):
@@ -580,62 +592,62 @@ def main():
         lime_explainer, shap_explainer = load_lime_shap_explainers(model, params, batch_stats)
 
     # Sidebar
-    st.sidebar.title("⚙️ Settings")
+    st.sidebar.title("Settings")
 
-    canvas_size = st.sidebar.slider("Canvas Size", 200, 400, 280, 20)
     stroke_width = st.sidebar.slider("Brush Size", 10, 50, 20, 5)
+    canvas_size = 280  # Fixed canvas size
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔬 Advanced XAI Techniques")
+    st.sidebar.markdown("### Advanced Analysis")
 
-    enable_lrp = st.sidebar.checkbox("Enable Layer Relevance Propagation (LRP)", value=False,
-                                     help="Shows pixel-wise relevance scores for predictions")
+    enable_lrp = st.sidebar.checkbox("Layer Relevance Propagation", value=False,
+                                     help="Pixel-wise relevance scores")
 
-    enable_cbn = st.sidebar.checkbox("Enable Concept Bottleneck Network", value=False,
-                                     help="Shows interpretable concept activations",
+    enable_cbn = st.sidebar.checkbox("Concept Bottleneck Network", value=False,
+                                     help="Interpretable concept activations",
                                      disabled=not cbn_enabled)
 
-    enable_lime = st.sidebar.checkbox("Enable LIME Explanations", value=False,
-                                      help="Local Interpretable Model-agnostic Explanations",
+    enable_lime = st.sidebar.checkbox("LIME Analysis", value=False,
+                                      help="Local model-agnostic explanations",
                                       disabled=lime_explainer is None)
 
-    enable_shap = st.sidebar.checkbox("Enable SHAP Explanations", value=False,
-                                      help="SHapley Additive exPlanations",
+    enable_shap = st.sidebar.checkbox("SHAP Analysis", value=False,
+                                      help="Shapley additive explanations",
                                       disabled=shap_explainer is None)
 
     if enable_lrp or enable_cbn or enable_lime or enable_shap:
-        st.sidebar.info("⚠️ Advanced techniques may take longer to compute")
+        st.sidebar.info("Advanced techniques may take longer to compute")
 
     if not cbn_enabled:
-        st.sidebar.warning("⚠️ CBN model not available. Train the model first.")
+        st.sidebar.warning("CBN model not available")
     if lime_explainer is None and LIME_AVAILABLE:
-        st.sidebar.warning("⚠️ LIME not available. Check dependencies.")
+        st.sidebar.warning("LIME not available")
     if shap_explainer is None and SHAP_AVAILABLE:
-        st.sidebar.warning("⚠️ SHAP not available. Check dependencies.")
+        st.sidebar.warning("SHAP not available")
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📖 Instructions")
+    st.sidebar.markdown("### How to Use")
     st.sidebar.markdown("""
-    1. Draw a digit (0-9) in the canvas
-    2. Click 'Predict' button
-    3. See prediction and XAI analysis
-    4. Click 'Clear' to draw again
+    1. Draw a digit (0-9)
+    2. Click 'Predict'
+    3. Explore the analysis
+    4. Click 'Clear' to try again
     """)
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🎯 Tips for Best Results")
+    st.sidebar.markdown("### Tips")
     st.sidebar.markdown("""
     - Draw larger digits
     - Center your drawing
-    - Make strokes clear
-    - Similar to handwritten style
+    - Use clear strokes
+    - Match handwriting style
     """)
 
     # Main content area
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.markdown('<div class="sub-header">🎨 Draw Here</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Drawing Canvas</div>', unsafe_allow_html=True)
 
         # Drawing canvas
         canvas_result = st_canvas(
@@ -650,33 +662,26 @@ def main():
         )
 
         # Buttons
-        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
+        btn_col1, btn_col2 = st.columns([1, 1])
 
         with btn_col1:
-            predict_button = st.button("🔮 Predict", type="primary", use_container_width=True)
+            predict_button = st.button("Predict", type="primary", use_container_width=True)
 
         with btn_col2:
-            clear_button = st.button("🗑️ Clear", use_container_width=True)
-
-        with btn_col3:
-            example_button = st.button("📝 Load Example", use_container_width=True)
+            clear_button = st.button("Clear", use_container_width=True)
 
     with col2:
-        st.markdown('<div class="sub-header">📊 Analysis Results</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Analysis Results</div>', unsafe_allow_html=True)
 
         # Placeholder for results
         result_placeholder = st.empty()
-
-    # Handle example loading
-    if example_button:
-        st.info("Draw a digit in the canvas to see predictions!")
 
     # Handle prediction
     if predict_button:
         if canvas_result.image_data is not None:
             # Check if canvas is empty
             if np.sum(canvas_result.image_data[:, :, 3]) < 100:
-                st.warning("⚠️ Canvas appears empty! Please draw a digit first.")
+                st.warning("Canvas appears empty. Please draw a digit first.")
             else:
                 # Preprocess image
                 with st.spinner("Processing image..."):
@@ -704,8 +709,8 @@ def main():
                         # Prediction result
                         st.markdown(f"""
                         <div class="prediction-box">
-                            <h2 style="text-align: center; color: #1f77b4;">
-                                Predicted Digit: <span style="font-size: 4rem;">{results['predicted_class']}</span>
+                            <h2 style="text-align: center;">
+                                Predicted: <span style="font-size: 3.5rem; font-weight: 700;">{results['predicted_class']}</span>
                             </h2>
                             <h3 style="text-align: center;">
                                 Confidence: {results['probabilities'][results['predicted_class']]:.1%}
@@ -714,23 +719,23 @@ def main():
                         """, unsafe_allow_html=True)
 
                         # Tabs for different analyses
-                        tab_names = ["🔍 XAI Visualization"]
+                        tab_names = ["Visual Explanation"]
 
                         # Add advanced tabs if enabled
                         if enable_lrp:
-                            tab_names.append("🧬 LRP Analysis")
+                            tab_names.append("LRP Analysis")
                         if enable_cbn:
-                            tab_names.append("🧠 CBN Concepts")
+                            tab_names.append("Concept Analysis")
                         if enable_lime:
-                            tab_names.append("🔦 LIME Analysis")
+                            tab_names.append("LIME")
                         if enable_shap:
-                            tab_names.append("🎯 SHAP Analysis")
+                            tab_names.append("SHAP")
 
                         tab_names.extend([
-                            "📍 Regional Analysis",
-                            "✏️ Stroke Features",
-                            "📊 All Probabilities",
-                            "💡 Interpretation"
+                            "Regional",
+                            "Stroke Features",
+                            "All Predictions",
+                            "Summary"
                         ])
 
                         tabs = st.tabs(tab_names)
@@ -739,25 +744,23 @@ def main():
                         # Tab 1: XAI Visualization
                         with tabs[current_tab]:
                             current_tab += 1
-                            st.markdown("### Visual Explanations")
 
-                            # Show preprocessed image for debugging
-                            st.markdown("**Preprocessed Image (28×28):**")
+                            # Show preprocessed image
                             col_a, col_b, col_c = st.columns([1, 1, 2])
                             with col_a:
                                 fig_debug = plt.figure(figsize=(3, 3))
                                 plt.imshow(processed_image.squeeze(), cmap='gray')
-                                plt.title('Model Input', fontsize=10)
+                                plt.title('Model Input (28×28)', fontsize=10)
                                 plt.axis('off')
                                 st.pyplot(fig_debug)
                                 plt.close()
                             with col_b:
-                                st.markdown("""
-                                This is what the model sees:
-                                - 28×28 pixels
-                                - Grayscale
-                                - White digit on black background
-                                - Centered
+                                st.caption("""
+                                Preprocessed input:
+                                • 28×28 pixels
+                                • Grayscale
+                                • Normalized
+                                • Centered
                                 """)
 
                             st.markdown("---")
@@ -770,11 +773,11 @@ def main():
                             st.pyplot(fig_xai)
                             plt.close()
 
-                            st.markdown("""
-                            **How to read:**
-                            - **Your Drawing**: Processed to 28×28 MNIST format
-                            - **GradCAM** (middle): Shows which regions are important (red = high, blue = low)
-                            - **Saliency Map** (right): Shows which pixels matter most (bright = important)
+                            st.caption("""
+                            Understanding the visualization:
+                            • Your Drawing: Processed to 28×28 MNIST format
+                            • GradCAM: Important regions (red=high, blue=low)
+                            • Saliency Map: Critical pixels (bright=important)
                             """)
 
                         # LRP Analysis tab (conditional)
@@ -893,11 +896,11 @@ def main():
                                 st.markdown("""
                                 **How to read:**
                                 - **Original Image**: Your drawing processed to 28×28 MNIST format
-                                - **LIME Explanation**: Heatmap showing important regions (red = positive, blue = negative)
+                                - **LIME Explanation**: Heatmap showing important regions (brighter = more important)
                                 - **LIME Overlay**: Important regions highlighted on original image
 
-                                **Interpretation:** LIME identifies which superpixels (regions) contribute most
-                                to predicting digit '{}'. Red areas support the prediction, blue areas argue against it.
+                                **Interpretation:** LIME identifies which superpixels (regions) are most important
+                                for predicting digit '{}'. Brighter areas had the strongest influence on the prediction.
                                 """.format(results['predicted_class']))
 
                                 # Get top features from LIME
@@ -1058,7 +1061,6 @@ def main():
                         # Interpretation tab
                         with tabs[current_tab]:
                             current_tab += 1
-                            st.markdown("### Shape Interpretation")
 
                             # Generate interpretation
                             interpretation = generate_interpretation(
@@ -1073,7 +1075,7 @@ def main():
 
                             # Additional insights
                             st.markdown("---")
-                            st.markdown("### 🔬 Detailed Insights")
+                            st.markdown("### Detailed Insights")
 
                             col_a, col_b = st.columns(2)
 
@@ -1103,40 +1105,37 @@ def main():
 
                             # Why this prediction?
                             st.markdown("---")
-                            st.markdown("### 🎯 Why This Prediction?")
+                            st.markdown("### Confidence Assessment")
 
                             confidence = results['probabilities'][results['predicted_class']]
 
                             if confidence > 0.9:
                                 st.success(f"""
-                                ✅ **High Confidence ({confidence:.1%})**
-                                The model found clear, distinctive features of digit '{results['predicted_class']}'.
-                                The shape matches expected patterns very well.
+                                **High Confidence ({confidence:.1%})**
+
+                                Clear, distinctive features detected for digit {results['predicted_class']}.
                                 """)
                             elif confidence > 0.7:
                                 st.info(f"""
-                                ℹ️ **Good Confidence ({confidence:.1%})**
-                                The model identified key features of digit '{results['predicted_class']}'.
-                                Some features may be ambiguous or similar to other digits.
+                                **Moderate Confidence ({confidence:.1%})**
+
+                                Key features identified, though some ambiguity present.
                                 """)
                             else:
                                 st.warning(f"""
-                                ⚠️ **Lower Confidence ({confidence:.1%})**
-                                The model is uncertain. The digit may be:
-                                - Ambiguously drawn
-                                - Similar to multiple digits
-                                - Missing key distinctive features
+                                **Lower Confidence ({confidence:.1%})**
 
-                                Try drawing more clearly or check top alternatives above.
+                                The digit may be ambiguously drawn or missing distinctive features.
+                                Consider checking alternative predictions above.
                                 """)
 
                         # Download results
                         st.markdown("---")
-                        if st.button("💾 Save Analysis Report"):
+                        if st.button("Save Analysis Report"):
                             # Create a simple text report
                             report = f"""
-MNIST XAI Analysis Report
-========================
+MNIST Analysis Report
+====================
 
 Predicted Digit: {results['predicted_class']}
 Confidence: {results['probabilities'][results['predicted_class']]:.2%}
@@ -1150,20 +1149,20 @@ Top 3 Predictions:
                             report += f"\n{interpretation}"
 
                             st.download_button(
-                                label="📄 Download Report",
+                                label="Download Report",
                                 data=report,
                                 file_name=f"mnist_analysis_digit_{results['predicted_class']}.txt",
                                 mime="text/plain"
                             )
         else:
-            st.warning("⚠️ No drawing detected. Please draw a digit first!")
+            st.warning("No drawing detected. Please draw a digit first.")
 
     # Footer
     st.markdown("---")
     st.markdown("""
-    <div style="text-align: center; color: #666;">
-        <p>Built with ❤️ using JAX, Flax, and Streamlit</p>
-        <p>🔍 Explainable AI powered by GradCAM, Saliency Maps, LRP, Concept Bottleneck Networks, LIME, and SHAP</p>
+    <div style="text-align: center; color: #95a5a6; font-size: 0.9rem; padding: 2rem 0 1rem 0;">
+        <p style="margin-bottom: 0.5rem;">Built with JAX, Flax, and Streamlit</p>
+        <p style="margin: 0;">XAI Methods: GradCAM, Saliency Maps, LRP, CBN, LIME, SHAP</p>
     </div>
     """, unsafe_allow_html=True)
 
